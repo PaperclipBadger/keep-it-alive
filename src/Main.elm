@@ -6,11 +6,14 @@ module Main exposing (main)
 --   https://guide.elm-lang.org/architecture/buttons.html
 --
 
-import Array exposing (Array)
+import Animation
+import Animation.Messenger
 import Browser
-import Html exposing (Html, button, div, text)
+import Html exposing (Html, div, text)
 import Html.Events exposing (onClick)
 import Html.Keyed
+import Identified exposing (Identified, identifierToString)
+import List
 import Random
 
 
@@ -51,6 +54,10 @@ main =
 -- MODEL
 
 
+type alias Animation =
+    Animation.Messenger.State Msg
+
+
 type PlantSize
     = Small
     | Medium
@@ -61,54 +68,6 @@ type alias Plant =
     { size : PlantSize
     , hunger : Int
     }
-
-
-{-| Type for seqeuential identifiers.
--}
-type Identifier
-    = Identifier Int
-
-
-someIdentifier : Identifier
-someIdentifier =
-    Identifier 0
-
-
-nextIdentifier : Identifier -> Identifier
-nextIdentifier =
-    Identifier << (+) 1 << identifierToInt
-
-
-identifierToInt : Identifier -> Int
-identifierToInt i =
-    case i of
-        Identifier int ->
-            int
-
-
-identifierToString : Identifier -> String
-identifierToString =
-    String.fromInt << identifierToInt
-
-
-type IdentifierGenerator
-    = IdentifierGenerator Identifier
-
-
-newIdentifierGenerator : IdentifierGenerator
-newIdentifierGenerator =
-    IdentifierGenerator someIdentifier
-
-
-generateIdentifier : IdentifierGenerator -> ( Identifier, IdentifierGenerator )
-generateIdentifier igen =
-    case igen of
-        IdentifierGenerator last ->
-            let
-                next =
-                    nextIdentifier last
-            in
-            ( next, IdentifierGenerator next )
 
 
 type alias Name =
@@ -132,8 +91,13 @@ type alias Goodness =
 
 
 type alias Person =
-    { identifier : Identifier
-    , firstName : Name
+    { details : PersonDetails
+    , animation : Animation
+    }
+
+
+type alias PersonDetails =
+    { firstName : Name
     , middleName : Maybe Name
     , lastName : Name
     , weight : Weight
@@ -143,9 +107,9 @@ type alias Person =
     }
 
 
-genPerson : Random.Generator Person
-genPerson =
-    Random.map (Person someIdentifier) genFirstName
+genPersonDetails : Random.Generator PersonDetails
+genPersonDetails =
+    Random.map PersonDetails genFirstName
         |> Random.andThen (\f -> Random.map f genMiddleName)
         |> Random.andThen (\f -> Random.map f genLastName)
         |> Random.andThen (\f -> Random.map f genWeight)
@@ -198,6 +162,24 @@ genGoodness =
     Random.int 1 10
 
 
+transparent : Animation
+transparent =
+    Animation.style [ Animation.opacity 0.0 ]
+
+
+targetEnter : Animation
+targetEnter =
+    Animation.interrupt [ Animation.to [ Animation.opacity 1.0 ] ] transparent
+
+
+targetExit : Identified.Identifier -> Animation -> Animation
+targetExit i =
+    Animation.interrupt
+        [ Animation.to [ Animation.opacity 0.0 ]
+        , Animation.Messenger.send (TargetExited i)
+        ]
+
+
 type SystemState
     = Loop
     | GameOver
@@ -205,20 +187,18 @@ type SystemState
 
 type alias Model =
     { systemState : SystemState
-    , identifierGenerator : IdentifierGenerator
     , plant : Plant
-    , targets : Array Person
+    , targets : Identified Person
     }
 
 
 init : () -> ( Model, Cmd Msg )
 init _ =
     ( { systemState = Loop
-      , identifierGenerator = newIdentifierGenerator
       , plant = { size = Small, hunger = 10 }
-      , targets = Array.empty
+      , targets = Identified.empty
       }
-    , Cmd.batch (List.repeat 4 (Random.generate NewTarget genPerson))
+    , Cmd.batch (List.repeat 4 (Random.generate NewTarget genPersonDetails))
     )
 
 
@@ -227,8 +207,10 @@ init _ =
 
 
 type Msg
-    = NewTarget Person
-    | Select Int
+    = Animate Animation.Msg
+    | NewTarget PersonDetails
+    | Select Identified.Identifier
+    | TargetExited Identified.Identifier
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -236,23 +218,57 @@ update msg model =
     case model.systemState of
         Loop ->
             case msg of
-                NewTarget person ->
-                    ( { model | targets = Array.push person model.targets }
+                Animate animMsg ->
+                    updateAnimations model animMsg
+
+                NewTarget details ->
+                    let
+                        ( i, targets ) =
+                            Identified.append { details = details, animation = targetEnter } model.targets
+                    in
+                    ( { model | targets = targets }
                     , Cmd.none
                     )
 
                 Select i ->
                     eat model i
 
+                TargetExited i ->
+                    ( { model | targets = Identified.remove i model.targets }
+                    , Cmd.none
+                    )
+
         GameOver ->
             ( model, Cmd.none )
 
 
+updateAnimations : Model -> Animation.Msg -> ( Model, Cmd Msg )
+updateAnimations model animMsg =
+    let
+        ( is, persons ) =
+            List.unzip (Identified.toList model.targets)
+
+        ( animations, cmds ) =
+            persons
+                |> List.map .animation
+                |> List.map (Animation.Messenger.update animMsg)
+                |> List.unzip
+
+        newpersons =
+            List.map2 (\person animation -> { person | animation = animation }) persons animations
+
+        newtargets =
+            List.map2 Tuple.pair is newpersons
+                |> List.foldr (\( i, person ) targets -> Identified.set i person targets) model.targets
+    in
+    ( { model | targets = newtargets }, Cmd.batch cmds )
+
+
 {-| Have the plant eat the person at index i
 -}
-eat : Model -> Int -> ( Model, Cmd Msg )
+eat : Model -> Identified.Identifier -> ( Model, Cmd Msg )
 eat model i =
-    case Array.get i model.targets of
+    case Identified.get i model.targets of
         Nothing ->
             ( model, Cmd.none )
 
@@ -262,7 +278,7 @@ eat model i =
                     model.plant
 
                 newplant =
-                    { plant | hunger = max (plant.hunger + 5 - person.weight) 0 }
+                    { plant | hunger = max (plant.hunger + 5 - person.details.weight) 0 }
             in
             ( { model
                 | systemState =
@@ -272,18 +288,10 @@ eat model i =
                     else
                         Loop
                 , plant = newplant
-                , targets = remove i model.targets
+                , targets = Identified.set i { person | animation = targetExit i person.animation } model.targets
               }
-            , Random.generate NewTarget genPerson
+            , Random.generate NewTarget genPersonDetails
             )
-
-
-{-| Remove the element at the given index. If the index is out of range, the array is
-unaltered.
--}
-remove : Int -> Array a -> Array a
-remove i a =
-    Array.append (Array.slice 0 i a) (Array.slice (i + 1) (Array.length a) a)
 
 
 
@@ -291,8 +299,12 @@ remove i a =
 
 
 subscriptions : Model -> Sub Msg
-subscriptions _ =
-    Sub.none
+subscriptions model =
+    let
+        ( is, persons ) =
+            List.unzip (Identified.toList model.targets)
+    in
+    Animation.subscription Animate (List.map .animation persons)
 
 
 
@@ -306,7 +318,7 @@ view model =
             { title = "The button, oooh"
             , body =
                 [ viewPlant model.plant
-                , Html.Keyed.node "div" [] (List.indexedMap viewTarget (Array.toList model.targets))
+                , Html.Keyed.node "div" [] (List.map viewTarget (Identified.toList model.targets))
                 ]
             }
 
@@ -337,19 +349,40 @@ viewPlantSize size =
             "large"
 
 
-viewTarget : Int -> Person -> ( String, Html Msg )
-viewTarget i person =
-    ( identifierToString person.identifier
-    , div [ onClick (Select i) ]
-        [ div [] [ text ("Name: " ++ viewFullName person) ]
-        , div [] [ text ("Weight: " ++ String.fromInt person.weight ++ "kg") ]
-        , div [] [ text ("Security: " ++ String.fromInt person.security) ]
-        , div [] [ text ("Popularity: " ++ String.fromInt person.popularity) ]
-        , div [] [ text ("Goodness: " ++ String.fromInt person.goodness) ]
+viewTarget : ( Identified.Identifier, Person ) -> ( String, Html Msg )
+viewTarget ( i, person ) =
+    ( identifierToString i
+    , div (Animation.render person.animation ++ [ onClick (Select i) ])
+        [ div [] [ text (identifierToString i) ]
+        , div [] [ text ("Name: " ++ viewFullName person) ]
+        , div [] [ text ("Weight: " ++ viewWeight person) ]
+        , div [] [ text ("Security: " ++ viewSecurity person) ]
+        , div [] [ text ("Popularity: " ++ viewPopularity person) ]
+        , div [] [ text ("Goodness: " ++ viewGoodness person) ]
         ]
     )
 
 
 viewFullName : Person -> String
 viewFullName person =
-    String.join " " [ person.firstName, Maybe.withDefault "" person.middleName, person.lastName ]
+    String.join " " [ person.details.firstName, Maybe.withDefault "" person.details.middleName, person.details.lastName ]
+
+
+viewWeight : Person -> String
+viewWeight person =
+    String.fromInt person.details.weight ++ "kg"
+
+
+viewSecurity : Person -> String
+viewSecurity person =
+    String.fromInt person.details.security
+
+
+viewPopularity : Person -> String
+viewPopularity person =
+    String.fromInt person.details.popularity
+
+
+viewGoodness : Person -> String
+viewGoodness person =
+    String.fromInt person.details.goodness
