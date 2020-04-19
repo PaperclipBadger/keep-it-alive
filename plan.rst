@@ -40,3 +40,13 @@ Three stages of plant largness:
  - small plant: dies by withering away
  - medium plant: ?
  - large plant: dies by eating you
+
+Turns out managing the pool of people so that it doesn't fill up with lightweights is
+challenging. We need mechanics that interact with the pool!
+
+ - Popularity: People don't necessarily replace themselves. If a person is popular,
+   their friends come looking for them. Popularity should anticorrelate with weight, maybe?
+   Ooof, what a striking social commentary.
+
+ - What we really want is the ability to purge dead weight. Maybe people wander away of
+   their own accord?
