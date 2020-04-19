@@ -45,6 +45,130 @@ fork f g h a b =
 
 
 
+-- Game parameters
+
+
+numSlots : Int
+numSlots =
+    6
+
+
+initPlantMass : Mass
+initPlantMass =
+    0
+
+
+plantMediumThreshold : Mass
+plantMediumThreshold =
+    50
+
+
+plantLargeThreshold : Mass
+plantLargeThreshold =
+    100
+
+
+hungerRefresh : PlantSize -> Float
+hungerRefresh size =
+    case size of
+        Small ->
+            5
+
+        Medium ->
+            7
+
+        Large ->
+            9
+
+
+minMass : Mass
+minMass =
+    0
+
+
+maxMass : Mass
+maxMass =
+    1
+
+
+minSecurity : Security
+minSecurity =
+    0
+
+
+maxSecurity : Security
+maxSecurity =
+    10
+
+
+minPopularity : Popularity
+minPopularity =
+    0
+
+
+maxPopularity : Popularity
+maxPopularity =
+    3
+
+
+minGoodness : Goodness
+minGoodness =
+    0
+
+
+maxGoodness : Goodness
+maxGoodness =
+    10
+
+
+ageLimit : Int
+ageLimit =
+    3
+
+
+someFirstName : Name
+someFirstName =
+    "Greg"
+
+
+otherFirstNames : List Name
+otherFirstNames =
+    [ "Steve", "Esther", "Blaine", "Yanni", "Jonathan", "Mickey", "Eve", "Remi", "Ribena", "Jamie", "James" ]
+
+
+someMiddleName : Name
+someMiddleName =
+    "\"The Death\""
+
+
+otherMiddleNames : List Name
+otherMiddleNames =
+    [ "Godfrey", "\"Hopscotch\"", "William", "Horton" ]
+
+
+someLastName : Name
+someLastName =
+    "Smith"
+
+
+otherLastNames : List Name
+otherLastNames =
+    [ "Rogers", "Van Der Pant", "Carlsberg", "Sutton", "Li", "Wang", "Forger" ]
+
+
+somePerson : Person
+somePerson =
+    { firstName = "Defaulty"
+    , middleName = Nothing
+    , lastName = "McDefaultFace"
+    , mass = 0
+    , security = 0
+    , popularity = 0
+    , goodness = 0
+    }
+
+
+
 -- MAIN
 
 
@@ -73,16 +197,6 @@ type alias Plant =
     }
 
 
-plantMediumThreshold : Mass
-plantMediumThreshold =
-    50
-
-
-plantLargeThreshold : Mass
-plantLargeThreshold =
-    100
-
-
 plantMassToSize : Mass -> PlantSize
 plantMassToSize mass =
     if mass < plantMediumThreshold then
@@ -98,19 +212,6 @@ plantMassToSize mass =
 plantSize : Plant -> PlantSize
 plantSize plant =
     plantMassToSize plant.mass
-
-
-hungerRefresh : PlantSize -> Float
-hungerRefresh size =
-    case size of
-        Small ->
-            5
-
-        Medium ->
-            7
-
-        Large ->
-            9
 
 
 type alias Name =
@@ -144,32 +245,53 @@ type alias Person =
     }
 
 
-somePerson : Person
-somePerson =
-    { firstName = "Defaulty"
-    , middleName = Nothing
-    , lastName = "McDefaultFace"
-    , mass = 0
-    , security = 0
-    , popularity = 0
-    , goodness = 0
-    }
+seedWithRemainder : Random.Generator ( Float, Float )
+seedWithRemainder =
+    Random.map (\f -> ( f, 1 - f )) (Random.float 0 1)
+
+
+getSeed : Random.Generator ( Float, Float ) -> Random.Generator Float
+getSeed =
+    Random.map (\( seed, _ ) -> seed)
+
+
+getRemainder : Random.Generator ( Float, Float ) -> Random.Generator Float
+getRemainder =
+    Random.map (\( _, remainder ) -> remainder)
+
+
+splitRemainder : Random.Generator ( Float, Float ) -> Random.Generator ( Float, Float )
+splitRemainder =
+    Random.andThen (\( _, remainder ) -> Random.map (\f -> ( f, remainder - f )) (Random.float 0 remainder))
 
 
 genPersonDetails : Random.Generator Person
 genPersonDetails =
+    let
+        massSeedWithRemainder =
+            seedWithRemainder
+
+        popularitySeedWithRemainder =
+            splitRemainder massSeedWithRemainder
+
+        securitySeedWithRemainder =
+            splitRemainder popularitySeedWithRemainder
+
+        goodnessSeed =
+            getRemainder securitySeedWithRemainder
+    in
     Random.map Person genFirstName
         |> Random.andThen (\f -> Random.map f genMiddleName)
         |> Random.andThen (\f -> Random.map f genLastName)
-        |> Random.andThen (\f -> Random.map f genMass)
-        |> Random.andThen (\f -> Random.map f genSecurity)
-        |> Random.andThen (\f -> Random.map f genPopularity)
-        |> Random.andThen (\f -> Random.map f genGoodness)
+        |> Random.andThen (\f -> massSeedWithRemainder |> getSeed |> Random.andThen genMass |> Random.map f)
+        |> Random.andThen (\f -> securitySeedWithRemainder |> getSeed |> Random.andThen genSecurity |> Random.map f)
+        |> Random.andThen (\f -> popularitySeedWithRemainder |> getSeed |> Random.andThen genPopularity |> Random.map f)
+        |> Random.andThen (\f -> goodnessSeed |> Random.andThen genGoodness |> Random.map f)
 
 
 genFirstName : Random.Generator Name
 genFirstName =
-    Random.uniform "Greg" [ "Steve", "Esther", "Blaine", "Yanni", "Jonathan", "Mickey", "Eve", "Remi", "Ribena", "Jamie", "James" ]
+    Random.uniform someFirstName otherFirstNames
 
 
 genMiddleName : Random.Generator (Maybe Name)
@@ -181,34 +303,44 @@ genMiddleName =
 
         value : Random.Generator Name
         value =
-            Random.uniform "\"The Death\"" [ "Godfrey", "\"Hopscotch\"", "William", "Horton" ]
+            Random.uniform someMiddleName otherMiddleNames
     in
     Random.map2 (<|) constructor value
 
 
 genLastName : Random.Generator Name
 genLastName =
-    Random.uniform "Smith" [ "Rogers", "Van Der Pant", "Carlsberg", "Sutton", "Li", "Wang", "Forger" ]
+    Random.uniform someLastName otherLastNames
 
 
-genMass : Random.Generator Mass
-genMass =
-    Random.float 0 10
+interpolateFloat : Float -> Float -> Float -> Float
+interpolateFloat bottom top x =
+    bottom + x * (top - bottom)
 
 
-genSecurity : Random.Generator Security
-genSecurity =
-    Random.int 1 10
+interpolateInt : Int -> Int -> Float -> Int
+interpolateInt bottom top x =
+    floor (toFloat bottom + x * toFloat (1 + top - bottom))
 
 
-genPopularity : Random.Generator Popularity
-genPopularity =
-    Random.int 1 10
+genMass : Float -> Random.Generator Mass
+genMass seed =
+    Random.constant (interpolateFloat minMass maxMass seed)
 
 
-genGoodness : Random.Generator Goodness
-genGoodness =
-    Random.int 1 10
+genSecurity : Float -> Random.Generator Security
+genSecurity seed =
+    Random.constant (interpolateInt minSecurity maxSecurity seed)
+
+
+genPopularity : Float -> Random.Generator Popularity
+genPopularity seed =
+    Random.constant (interpolateInt minPopularity maxPopularity seed)
+
+
+genGoodness : Float -> Random.Generator Goodness
+genGoodness seed =
+    Random.constant (interpolateInt minGoodness maxGoodness seed)
 
 
 transparent : Animation
@@ -317,11 +449,6 @@ getSlot identifier v =
     helper 0
 
 
-ageLimit : Int
-ageLimit =
-    3
-
-
 incrementAges : TargetSelectView -> TargetSelectView
 incrementAges v =
     let
@@ -427,17 +554,12 @@ type alias Model =
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    ( { currentView = TargetSelect { slots = Array.repeat 4 Nothing, queue = [] }
+    ( { currentView = TargetSelect { slots = Array.repeat numSlots Nothing, queue = [] }
       , plant = { hunger = hungerRefresh (plantMassToSize initPlantMass), mass = initPlantMass }
       , targets = Identified.empty
       }
     , Cmd.batch (List.repeat 4 (Random.generate NewTarget genPersonDetails))
     )
-
-
-initPlantMass : Mass
-initPlantMass =
-    0
 
 
 
@@ -521,7 +643,7 @@ eat model i =
                 | currentView = newView
                 , plant = newPlant
               }
-            , Random.generate NewTarget genPersonDetails
+            , Cmd.batch (List.repeat person.popularity (Random.generate NewTarget genPersonDetails))
             )
 
 
