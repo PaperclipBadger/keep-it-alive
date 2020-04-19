@@ -10,12 +10,14 @@ import Animation
 import Animation.Messenger
 import Array exposing (Array)
 import Browser
-import Html exposing (Html, div, text)
+import Html exposing (Html)
 import Html.Events exposing (onClick)
-import Html.Keyed
 import Identified exposing (Identified, identifierToString)
 import List
 import Random
+import Svg exposing (Svg)
+import Svg.Attributes
+import Svg.Keyed
 
 
 
@@ -466,20 +468,43 @@ view model =
         TargetSelect v ->
             { title = "The button, oooh"
             , body =
-                [ viewPlant model.plant
-                , v.slots
-                    |> Array.toList
-                    |> List.map (Maybe.map (viewSlot model.targets))
-                    |> List.map (Maybe.withDefault (div [] []))
-                    |> keyByIndex
-                    |> Html.Keyed.node "div" []
+                [ Svg.svg
+                    [ Svg.Attributes.width (String.fromFloat pageWidth)
+                    , Svg.Attributes.height (String.fromFloat pageHeight)
+                    , Svg.Attributes.viewBox
+                        ([ 0, 0, pageWidth, pageHeight ] |> List.map String.fromFloat |> String.join " ")
+                    ]
+                    [ viewPlant model.plant
+                    , v.slots
+                        |> Array.toList
+                        |> indexedMap (\i -> Maybe.map (viewSlot i model.targets))
+                        |> catMaybes
+                        |> keyByIndex
+                        |> Svg.Keyed.node "g"
+                            [ translate optionsOriginX optionsOriginY ]
+                    ]
                 ]
             }
 
         GameOver ->
             { title = "Game over!"
-            , body = [ text "You died!" ]
+            , body = [ Html.text "You died!" ]
             }
+
+
+indexedMap : (Int -> a -> b) -> List a -> List b
+indexedMap f =
+    let
+        helper : Int -> List a -> List b
+        helper i l =
+            case l of
+                [] ->
+                    []
+
+                x :: xs ->
+                    f i x :: helper (i + 1) xs
+    in
+    helper 0
 
 
 keyByIndex : List a -> List ( String, a )
@@ -497,11 +522,98 @@ keyByIndex =
     helper 0
 
 
-viewPlant : Plant -> Html Msg
+pageHeight : Float
+pageHeight =
+    1000
+
+
+pageWidth : Float
+pageWidth =
+    1000
+
+
+verticalMargin : Float
+verticalMargin =
+    5
+
+
+lineHeight : Float
+lineHeight =
+    15
+
+
+plantOriginX : Float
+plantOriginX =
+    0
+
+
+plantOriginY : Float
+plantOriginY =
+    0
+
+
+plantHeight : Float
+plantHeight =
+    2 * lineHeight
+
+
+plantWidth : Float
+plantWidth =
+    pageWidth
+
+
+optionsOriginX : Float
+optionsOriginX =
+    plantOriginX
+
+
+optionsOriginY : Float
+optionsOriginY =
+    plantOriginY + plantHeight + verticalMargin
+
+
+optionHeight : Float
+optionHeight =
+    6 * lineHeight
+
+
+optionWidth : Float
+optionWidth =
+    pageWidth
+
+
+optionCornerRounding : Float
+optionCornerRounding =
+    lineHeight / 2
+
+
+optionOriginX : Int -> Float
+optionOriginX _ =
+    0
+
+
+optionOriginY : Int -> Float
+optionOriginY index =
+    toFloat index * (optionHeight + verticalMargin)
+
+
+viewPlant : Plant -> Svg Msg
 viewPlant plant =
-    div []
-        [ text ("Plant size: " ++ viewPlantSize plant.size)
-        , text ("Plant hunger: " ++ String.fromInt plant.hunger)
+    Svg.g
+        [ translate plantOriginX plantOriginY
+        ]
+        [ Svg.rect
+            [ Svg.Attributes.height (String.fromFloat plantHeight)
+            , Svg.Attributes.width (String.fromFloat plantWidth)
+            , Svg.Attributes.fill "grey"
+            ]
+            []
+        , Svg.text_
+            [ translate 0 (1 * lineHeight), Svg.Attributes.fill "black" ]
+            [ Svg.text ("Plant size: " ++ viewPlantSize plant.size) ]
+        , Svg.text_
+            [ translate 0 (2 * lineHeight), Svg.Attributes.fill "black" ]
+            [ Svg.text ("Plant hunger: " ++ String.fromInt plant.hunger) ]
         ]
 
 
@@ -518,19 +630,51 @@ viewPlantSize size =
             "large"
 
 
-viewSlot : Identified Person -> Slot -> Html Msg
-viewSlot people slot =
+translate : Float -> Float -> Html.Attribute Msg
+translate a b =
+    Svg.Attributes.transform (String.concat [ "translate(", String.fromFloat a, ",", String.fromFloat b, ")" ])
+
+
+viewSlot : Int -> Identified Person -> Slot -> Svg Msg
+viewSlot index people slot =
     let
         person =
             Maybe.withDefault somePerson (Identified.get slot.identifier people)
     in
-    div (Animation.render slot.animation ++ [ onClick (Select slot.identifier) ])
-        [ div [] [ text (identifierToString slot.identifier) ]
-        , div [] [ text ("Name: " ++ viewFullName person) ]
-        , div [] [ text ("Weight: " ++ viewWeight person) ]
-        , div [] [ text ("Security: " ++ viewSecurity person) ]
-        , div [] [ text ("Popularity: " ++ viewPopularity person) ]
-        , div [] [ text ("Goodness: " ++ viewGoodness person) ]
+    Svg.g
+        (List.concat
+            [ Animation.render slot.animation
+            , [ translate (optionOriginX index) (optionOriginY index)
+              , onClick (Select slot.identifier)
+              ]
+            ]
+        )
+        [ Svg.rect
+            [ Svg.Attributes.height (String.fromFloat optionHeight)
+            , Svg.Attributes.width (String.fromFloat optionWidth)
+            , Svg.Attributes.rx (String.fromFloat optionCornerRounding)
+            , Svg.Attributes.ry (String.fromFloat optionCornerRounding)
+            , Svg.Attributes.fill "grey"
+            ]
+            []
+        , Svg.text_
+            [ translate 0 (lineHeight * 1), Svg.Attributes.fill "black" ]
+            [ Svg.text ("Id: " ++ identifierToString slot.identifier) ]
+        , Svg.text_
+            [ translate 0 (lineHeight * 2), Svg.Attributes.fill "black" ]
+            [ Svg.text ("Name: " ++ viewFullName person) ]
+        , Svg.text_
+            [ translate 0 (lineHeight * 3), Svg.Attributes.fill "black" ]
+            [ Svg.text ("Weight: " ++ viewWeight person) ]
+        , Svg.text_
+            [ translate 0 (lineHeight * 4), Svg.Attributes.fill "black" ]
+            [ Svg.text ("Security: " ++ viewSecurity person) ]
+        , Svg.text_
+            [ translate 0 (lineHeight * 5), Svg.Attributes.fill "black" ]
+            [ Svg.text ("Popularity: " ++ viewPopularity person) ]
+        , Svg.text_
+            [ translate 0 (lineHeight * 6), Svg.Attributes.fill "black" ]
+            [ Svg.text ("Goodness: " ++ viewGoodness person) ]
         ]
 
 
