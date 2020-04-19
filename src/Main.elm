@@ -68,16 +68,56 @@ type PlantSize
 
 
 type alias Plant =
-    { size : PlantSize
-    , hunger : Int
+    { hunger : Int
+    , mass : Int
     }
+
+
+plantMediumThreshold : Int
+plantMediumThreshold =
+    50
+
+
+plantLargeThreshold : Int
+plantLargeThreshold =
+    100
+
+
+plantMassToSize : Int -> PlantSize
+plantMassToSize mass =
+    if mass < plantMediumThreshold then
+        Small
+
+    else if mass < plantLargeThreshold then
+        Medium
+
+    else
+        Large
+
+
+plantSize : Plant -> PlantSize
+plantSize plant =
+    plantMassToSize plant.mass
+
+
+hungerRefresh : PlantSize -> Int
+hungerRefresh size =
+    case size of
+        Small ->
+            5
+
+        Medium ->
+            7
+
+        Large ->
+            9
 
 
 type alias Name =
     String
 
 
-type alias Weight =
+type alias Mass =
     Int
 
 
@@ -97,7 +137,7 @@ type alias Person =
     { firstName : Name
     , middleName : Maybe Name
     , lastName : Name
-    , weight : Weight
+    , mass : Mass
     , security : Security
     , popularity : Popularity
     , goodness : Goodness
@@ -109,7 +149,7 @@ somePerson =
     { firstName = "Defaulty"
     , middleName = Nothing
     , lastName = "McDefaultFace"
-    , weight = 0
+    , mass = 0
     , security = 0
     , popularity = 0
     , goodness = 0
@@ -121,7 +161,7 @@ genPersonDetails =
     Random.map Person genFirstName
         |> Random.andThen (\f -> Random.map f genMiddleName)
         |> Random.andThen (\f -> Random.map f genLastName)
-        |> Random.andThen (\f -> Random.map f genWeight)
+        |> Random.andThen (\f -> Random.map f genMass)
         |> Random.andThen (\f -> Random.map f genSecurity)
         |> Random.andThen (\f -> Random.map f genPopularity)
         |> Random.andThen (\f -> Random.map f genGoodness)
@@ -151,8 +191,8 @@ genLastName =
     Random.uniform "Smith" [ "Rogers", "Van Der Pant", "Carlsberg", "Sutton", "Li", "Wang", "Forger" ]
 
 
-genWeight : Random.Generator Weight
-genWeight =
+genMass : Random.Generator Mass
+genMass =
     Random.int 1 10
 
 
@@ -347,11 +387,16 @@ type alias Model =
 init : () -> ( Model, Cmd Msg )
 init _ =
     ( { currentView = TargetSelect { slots = Array.repeat 4 Nothing, queue = [] }
-      , plant = { size = Small, hunger = 10 }
+      , plant = { hunger = hungerRefresh (plantMassToSize initPlantMass), mass = initPlantMass }
       , targets = Identified.empty
       }
     , Cmd.batch (List.repeat 4 (Random.generate NewTarget genPersonDetails))
     )
+
+
+initPlantMass : Int
+initPlantMass =
+    0
 
 
 
@@ -414,7 +459,10 @@ eat model i =
                     model.plant
 
                 newPlant =
-                    { plant | hunger = max (plant.hunger + 5 - person.weight) 0 }
+                    { plant
+                        | hunger = max (plant.hunger + hungerRefresh (plantSize plant) - person.mass) 0
+                        , mass = plant.mass + person.mass
+                    }
 
                 newView =
                     case model.currentView of
@@ -474,7 +522,13 @@ view model =
                     , Svg.Attributes.viewBox
                         ([ 0, 0, pageWidth, pageHeight ] |> List.map String.fromFloat |> String.join " ")
                     ]
-                    [ viewPlant model.plant
+                    [ Svg.rect
+                        [ Svg.Attributes.width (String.fromFloat pageWidth)
+                        , Svg.Attributes.height (String.fromFloat pageHeight)
+                        , Svg.Attributes.fill "black"
+                        ]
+                        []
+                    , viewPlant model.plant
                     , v.slots
                         |> Array.toList
                         |> indexedMap (\i -> Maybe.map (viewSlot i model.targets))
@@ -610,16 +664,16 @@ viewPlant plant =
             []
         , Svg.text_
             [ translate 0 (1 * lineHeight), Svg.Attributes.fill "black" ]
-            [ Svg.text ("Plant size: " ++ viewPlantSize plant.size) ]
+            [ Svg.text ("Plant size: " ++ viewPlantSize plant) ]
         , Svg.text_
             [ translate 0 (2 * lineHeight), Svg.Attributes.fill "black" ]
             [ Svg.text ("Plant hunger: " ++ String.fromInt plant.hunger) ]
         ]
 
 
-viewPlantSize : PlantSize -> String
-viewPlantSize size =
-    case size of
+viewPlantSize : Plant -> String
+viewPlantSize plant =
+    case plantSize plant of
         Small ->
             "small"
 
@@ -665,7 +719,7 @@ viewSlot index people slot =
             [ Svg.text ("Name: " ++ viewFullName person) ]
         , Svg.text_
             [ translate 0 (lineHeight * 3), Svg.Attributes.fill "black" ]
-            [ Svg.text ("Weight: " ++ viewWeight person) ]
+            [ Svg.text ("Mass: " ++ viewMass person) ]
         , Svg.text_
             [ translate 0 (lineHeight * 4), Svg.Attributes.fill "black" ]
             [ Svg.text ("Security: " ++ viewSecurity person) ]
@@ -683,9 +737,9 @@ viewFullName person =
     String.join " " [ person.firstName, Maybe.withDefault "" person.middleName, person.lastName ]
 
 
-viewWeight : Person -> String
-viewWeight person =
-    String.fromInt person.weight ++ "kg"
+viewMass : Person -> String
+viewMass person =
+    String.fromInt person.mass ++ "kg"
 
 
 viewSecurity : Person -> String
