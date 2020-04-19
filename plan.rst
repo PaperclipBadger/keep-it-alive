@@ -50,3 +50,9 @@ challenging. We need mechanics that interact with the pool!
 
  - What we really want is the ability to purge dead weight. Maybe people wander away of
    their own accord?
+
+ - Reverse policemen! Crows! Eating one crow spooks all the others, and they leave.
+   
+ - Policemen! Suppose eating one policeman eats all of them at once, but each individual
+   policeman is very scrawny. Then the player wants to let the policemen pile up, but
+   letting the policement pile up reduces your other options?
