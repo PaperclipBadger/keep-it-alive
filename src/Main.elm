@@ -8,6 +8,7 @@ module Main exposing (main)
 
 import Animation
 import Animation.Messenger
+import Array exposing (Array)
 import Browser
 import Html exposing (Html, div, text)
 import Html.Events exposing (onClick)
@@ -91,12 +92,6 @@ type alias Goodness =
 
 
 type alias Person =
-    { details : PersonDetails
-    , animation : Animation
-    }
-
-
-type alias PersonDetails =
     { firstName : Name
     , middleName : Maybe Name
     , lastName : Name
@@ -107,9 +102,21 @@ type alias PersonDetails =
     }
 
 
-genPersonDetails : Random.Generator PersonDetails
+somePerson : Person
+somePerson =
+    { firstName = "Defaulty"
+    , middleName = Nothing
+    , lastName = "McDefaultFace"
+    , weight = 0
+    , security = 0
+    , popularity = 0
+    , goodness = 0
+    }
+
+
+genPersonDetails : Random.Generator Person
 genPersonDetails =
-    Random.map PersonDetails genFirstName
+    Random.map Person genFirstName
         |> Random.andThen (\f -> Random.map f genMiddleName)
         |> Random.andThen (\f -> Random.map f genLastName)
         |> Random.andThen (\f -> Random.map f genWeight)
@@ -180,13 +187,156 @@ targetExit i =
         ]
 
 
-type SystemState
-    = Loop
+type View
+    = TargetSelect TargetSelectView
     | GameOver
 
 
+type alias Slot =
+    { identifier : Identified.Identifier
+    , animation : Animation
+    }
+
+
+type alias TargetSelectView =
+    { slots : Array (Maybe Slot)
+    , queue : List Identified.Identifier
+    }
+
+
+enqueueIdentifier : Identified.Identifier -> TargetSelectView -> TargetSelectView
+enqueueIdentifier i v =
+    loadIdentifiers { v | queue = i :: v.queue }
+
+
+firstEmptySlot : TargetSelectView -> Maybe Int
+firstEmptySlot v =
+    let
+        helper : Int -> Maybe Int
+        helper i =
+            case Array.get i v.slots of
+                Nothing ->
+                    Nothing
+
+                Just Nothing ->
+                    Just i
+
+                Just (Just _) ->
+                    helper (i + 1)
+    in
+    helper 0
+
+
+loadIdentifiers : TargetSelectView -> TargetSelectView
+loadIdentifiers v =
+    case v.queue of
+        [] ->
+            v
+
+        identifier :: newQueue ->
+            case firstEmptySlot v of
+                Nothing ->
+                    v
+
+                Just i ->
+                    let
+                        value =
+                            Just
+                                { identifier = identifier
+                                , animation = targetEnter
+                                }
+                    in
+                    loadIdentifiers { slots = Array.set i value v.slots, queue = newQueue }
+
+
+getSlot : Identified.Identifier -> TargetSelectView -> Maybe ( Int, Slot )
+getSlot identifier v =
+    let
+        helper : Int -> Maybe ( Int, Slot )
+        helper i =
+            case Array.get i v.slots of
+                Nothing ->
+                    Nothing
+
+                Just Nothing ->
+                    Nothing
+
+                Just (Just slot) ->
+                    if identifier == slot.identifier then
+                        Just ( i, slot )
+
+                    else
+                        helper (i + 1)
+    in
+    helper 0
+
+
+cueUnloadIdentifier : Identified.Identifier -> TargetSelectView -> TargetSelectView
+cueUnloadIdentifier identifier v =
+    case getSlot identifier v of
+        Nothing ->
+            v
+
+        Just ( index, slot ) ->
+            { v | slots = Array.set index (Just { slot | animation = targetExit identifier slot.animation }) v.slots }
+
+
+unloadIdentifier : Identified.Identifier -> TargetSelectView -> TargetSelectView
+unloadIdentifier identifier v =
+    case getSlot identifier v of
+        Nothing ->
+            v
+
+        Just ( index, _ ) ->
+            loadIdentifiers { v | slots = Array.set index Nothing v.slots }
+
+
+catMaybes : List (Maybe a) -> List a
+catMaybes l =
+    case l of
+        [] ->
+            []
+
+        Nothing :: xs ->
+            catMaybes xs
+
+        (Just x) :: xs ->
+            x :: catMaybes xs
+
+
+updateAnimations : TargetSelectView -> Animation.Msg -> ( TargetSelectView, Cmd Msg )
+updateAnimations v animMsg =
+    let
+        updateSlotAnimation : Maybe Slot -> ( Maybe Slot, Maybe (Cmd Msg) )
+        updateSlotAnimation slot =
+            case slot of
+                Nothing ->
+                    ( Nothing, Nothing )
+
+                Just { identifier, animation } ->
+                    let
+                        ( newAnimation, cmd ) =
+                            Animation.Messenger.update animMsg animation
+                    in
+                    ( Just { identifier = identifier, animation = newAnimation }, Just cmd )
+
+        ( newSlotsList, maybecmds ) =
+            v.slots
+                |> Array.toList
+                |> List.map updateSlotAnimation
+                |> List.unzip
+
+        newSlots =
+            Array.fromList newSlotsList
+
+        cmds =
+            catMaybes maybecmds
+    in
+    ( { v | slots = newSlots }, Cmd.batch cmds )
+
+
 type alias Model =
-    { systemState : SystemState
+    { currentView : View
     , plant : Plant
     , targets : Identified Person
     }
@@ -194,7 +344,7 @@ type alias Model =
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    ( { systemState = Loop
+    ( { currentView = TargetSelect { slots = Array.repeat 4 Nothing, queue = [] }
       , plant = { size = Small, hunger = 10 }
       , targets = Identified.empty
       }
@@ -208,25 +358,29 @@ init _ =
 
 type Msg
     = Animate Animation.Msg
-    | NewTarget PersonDetails
+    | NewTarget Person
     | Select Identified.Identifier
     | TargetExited Identified.Identifier
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
-    case model.systemState of
-        Loop ->
+    case model.currentView of
+        TargetSelect v ->
             case msg of
                 Animate animMsg ->
-                    updateAnimations model animMsg
+                    let
+                        ( newV, cmd ) =
+                            updateAnimations v animMsg
+                    in
+                    ( { model | currentView = TargetSelect newV }, cmd )
 
-                NewTarget details ->
+                NewTarget person ->
                     let
                         ( i, targets ) =
-                            Identified.append { details = details, animation = targetEnter } model.targets
+                            Identified.append person model.targets
                     in
-                    ( { model | targets = targets }
+                    ( { model | currentView = TargetSelect (enqueueIdentifier i v), targets = targets }
                     , Cmd.none
                     )
 
@@ -234,7 +388,9 @@ update msg model =
                     eat model i
 
                 TargetExited i ->
-                    ( { model | targets = Identified.remove i model.targets }
+                    ( { model
+                        | currentView = TargetSelect (unloadIdentifier i v)
+                      }
                     , Cmd.none
                     )
 
@@ -242,29 +398,7 @@ update msg model =
             ( model, Cmd.none )
 
 
-updateAnimations : Model -> Animation.Msg -> ( Model, Cmd Msg )
-updateAnimations model animMsg =
-    let
-        ( is, persons ) =
-            List.unzip (Identified.toList model.targets)
-
-        ( animations, cmds ) =
-            persons
-                |> List.map .animation
-                |> List.map (Animation.Messenger.update animMsg)
-                |> List.unzip
-
-        newpersons =
-            List.map2 (\person animation -> { person | animation = animation }) persons animations
-
-        newtargets =
-            List.map2 Tuple.pair is newpersons
-                |> List.foldr (\( i, person ) targets -> Identified.set i person targets) model.targets
-    in
-    ( { model | targets = newtargets }, Cmd.batch cmds )
-
-
-{-| Have the plant eat the person at index i
+{-| Have the plant eat the person with identifier i
 -}
 eat : Model -> Identified.Identifier -> ( Model, Cmd Msg )
 eat model i =
@@ -277,18 +411,24 @@ eat model i =
                 plant =
                     model.plant
 
-                newplant =
-                    { plant | hunger = max (plant.hunger + 5 - person.details.weight) 0 }
+                newPlant =
+                    { plant | hunger = max (plant.hunger + 5 - person.weight) 0 }
+
+                newView =
+                    case model.currentView of
+                        GameOver ->
+                            GameOver
+
+                        TargetSelect v ->
+                            if newPlant.hunger > 10 then
+                                GameOver
+
+                            else
+                                TargetSelect (cueUnloadIdentifier i v)
             in
             ( { model
-                | systemState =
-                    if newplant.hunger > 10 then
-                        GameOver
-
-                    else
-                        Loop
-                , plant = newplant
-                , targets = Identified.set i { person | animation = targetExit i person.animation } model.targets
+                | currentView = newView
+                , plant = newPlant
               }
             , Random.generate NewTarget genPersonDetails
             )
@@ -300,11 +440,20 @@ eat model i =
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-    let
-        ( is, persons ) =
-            List.unzip (Identified.toList model.targets)
-    in
-    Animation.subscription Animate (List.map .animation persons)
+    case model.currentView of
+        GameOver ->
+            Sub.none
+
+        TargetSelect v ->
+            let
+                animations : List Animation
+                animations =
+                    v.slots
+                        |> Array.toList
+                        |> catMaybes
+                        |> List.map .animation
+            in
+            Animation.subscription Animate animations
 
 
 
@@ -313,12 +462,17 @@ subscriptions model =
 
 view : Model -> Browser.Document Msg
 view model =
-    case model.systemState of
-        Loop ->
+    case model.currentView of
+        TargetSelect v ->
             { title = "The button, oooh"
             , body =
                 [ viewPlant model.plant
-                , Html.Keyed.node "div" [] (List.map viewTarget (Identified.toList model.targets))
+                , v.slots
+                    |> Array.toList
+                    |> List.map (Maybe.map (viewSlot model.targets))
+                    |> List.map (Maybe.withDefault (div [] []))
+                    |> keyByIndex
+                    |> Html.Keyed.node "div" []
                 ]
             }
 
@@ -326,6 +480,21 @@ view model =
             { title = "Game over!"
             , body = [ text "You died!" ]
             }
+
+
+keyByIndex : List a -> List ( String, a )
+keyByIndex =
+    let
+        helper : Int -> List a -> List ( String, a )
+        helper i l =
+            case l of
+                [] ->
+                    []
+
+                x :: xs ->
+                    ( String.fromInt i, x ) :: helper (i + 1) xs
+    in
+    helper 0
 
 
 viewPlant : Plant -> Html Msg
@@ -349,40 +518,42 @@ viewPlantSize size =
             "large"
 
 
-viewTarget : ( Identified.Identifier, Person ) -> ( String, Html Msg )
-viewTarget ( i, person ) =
-    ( identifierToString i
-    , div (Animation.render person.animation ++ [ onClick (Select i) ])
-        [ div [] [ text (identifierToString i) ]
+viewSlot : Identified Person -> Slot -> Html Msg
+viewSlot people slot =
+    let
+        person =
+            Maybe.withDefault somePerson (Identified.get slot.identifier people)
+    in
+    div (Animation.render slot.animation ++ [ onClick (Select slot.identifier) ])
+        [ div [] [ text (identifierToString slot.identifier) ]
         , div [] [ text ("Name: " ++ viewFullName person) ]
         , div [] [ text ("Weight: " ++ viewWeight person) ]
         , div [] [ text ("Security: " ++ viewSecurity person) ]
         , div [] [ text ("Popularity: " ++ viewPopularity person) ]
         , div [] [ text ("Goodness: " ++ viewGoodness person) ]
         ]
-    )
 
 
 viewFullName : Person -> String
 viewFullName person =
-    String.join " " [ person.details.firstName, Maybe.withDefault "" person.details.middleName, person.details.lastName ]
+    String.join " " [ person.firstName, Maybe.withDefault "" person.middleName, person.lastName ]
 
 
 viewWeight : Person -> String
 viewWeight person =
-    String.fromInt person.details.weight ++ "kg"
+    String.fromInt person.weight ++ "kg"
 
 
 viewSecurity : Person -> String
 viewSecurity person =
-    String.fromInt person.details.security
+    String.fromInt person.security
 
 
 viewPopularity : Person -> String
 viewPopularity person =
-    String.fromInt person.details.popularity
+    String.fromInt person.popularity
 
 
 viewGoodness : Person -> String
 viewGoodness person =
-    String.fromInt person.details.goodness
+    String.fromInt person.goodness
