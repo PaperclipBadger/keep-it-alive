@@ -53,6 +53,11 @@ numSlots =
     6
 
 
+startSlots : Int
+startSlots =
+    3
+
+
 initPlantMass : Mass
 initPlantMass =
     0
@@ -60,25 +65,35 @@ initPlantMass =
 
 plantMediumThreshold : Mass
 plantMediumThreshold =
-    50
+    5
 
 
 plantLargeThreshold : Mass
 plantLargeThreshold =
-    100
+    10
 
 
 hungerRefresh : PlantSize -> Float
 hungerRefresh size =
     case size of
         Small ->
-            5
+            0.5
 
         Medium ->
-            7
+            0.7
 
         Large ->
-            9
+            0.9
+
+
+minHunger : Float
+minHunger =
+    0
+
+
+maxHunger : Float
+maxHunger =
+    1
 
 
 minMass : Mass
@@ -121,9 +136,9 @@ maxGoodness =
     10
 
 
-ageLimit : Int
-ageLimit =
-    3
+maxAge : Int
+maxAge =
+    2
 
 
 someFirstName : Name
@@ -239,54 +254,42 @@ type alias Person =
     , middleName : Maybe Name
     , lastName : Name
     , mass : Mass
-    , security : Security
     , popularity : Popularity
+    , security : Security
     , goodness : Goodness
     }
-
-
-seedWithRemainder : Random.Generator ( Float, Float )
-seedWithRemainder =
-    Random.map (\f -> ( f, 1 - f )) (Random.float 0 1)
-
-
-getSeed : Random.Generator ( Float, Float ) -> Random.Generator Float
-getSeed =
-    Random.map (\( seed, _ ) -> seed)
-
-
-getRemainder : Random.Generator ( Float, Float ) -> Random.Generator Float
-getRemainder =
-    Random.map (\( _, remainder ) -> remainder)
-
-
-splitRemainder : Random.Generator ( Float, Float ) -> Random.Generator ( Float, Float )
-splitRemainder =
-    Random.andThen (\( _, remainder ) -> Random.map (\f -> ( f, remainder - f )) (Random.float 0 remainder))
 
 
 genPersonDetails : Random.Generator Person
 genPersonDetails =
     let
-        massSeedWithRemainder =
-            seedWithRemainder
+        genMassAndPopularitySeed : Random.Generator Float
+        genMassAndPopularitySeed =
+            Random.float 0 1
 
-        popularitySeedWithRemainder =
-            splitRemainder massSeedWithRemainder
+        genSecuritySeed : Random.Generator Float
+        genSecuritySeed =
+            Random.float 0 1
 
-        securitySeedWithRemainder =
-            splitRemainder popularitySeedWithRemainder
-
-        goodnessSeed =
-            getRemainder securitySeedWithRemainder
+        genGoodnessSeed : Random.Generator Float
+        genGoodnessSeed =
+            Random.float 0 1
     in
     Random.map Person genFirstName
         |> Random.andThen (\f -> Random.map f genMiddleName)
         |> Random.andThen (\f -> Random.map f genLastName)
-        |> Random.andThen (\f -> massSeedWithRemainder |> getSeed |> Random.andThen genMass |> Random.map f)
-        |> Random.andThen (\f -> securitySeedWithRemainder |> getSeed |> Random.andThen genSecurity |> Random.map f)
-        |> Random.andThen (\f -> popularitySeedWithRemainder |> getSeed |> Random.andThen genPopularity |> Random.map f)
-        |> Random.andThen (\f -> goodnessSeed |> Random.andThen genGoodness |> Random.map f)
+        |> Random.andThen
+            (\f ->
+                Random.map (\seed -> ( seed, f )) genMassAndPopularitySeed
+                    |> Random.andThen
+                        (\( seed, f_ ) -> Random.map (\mass -> ( seed, f_ mass )) (genMass seed))
+                    |> Random.andThen
+                        (\( seed, f_ ) -> Random.map (\popularity -> ( seed, f_ popularity )) (genPopularity (1 - seed)))
+                    |> Random.map
+                        (\( _, f_ ) -> f_)
+            )
+        |> Random.andThen (\f -> genSecuritySeed |> Random.andThen genSecurity |> Random.map f)
+        |> Random.andThen (\f -> genGoodnessSeed |> Random.andThen genGoodness |> Random.map f)
 
 
 genFirstName : Random.Generator Name
@@ -408,6 +411,21 @@ firstEmptySlot v =
     helper 0
 
 
+isJust : Maybe a -> Bool
+isJust maybe =
+    case maybe of
+        Nothing ->
+            False
+
+        Just _ ->
+            True
+
+
+allSlotsEmpty : TargetSelectView -> Bool
+allSlotsEmpty v =
+    Array.foldr (&&) True (Array.map (not << isJust) v.slots)
+
+
 loadIdentifiers : TargetSelectView -> TargetSelectView
 loadIdentifiers v =
     case v.queue of
@@ -467,7 +485,7 @@ incrementAges v =
                     identity
 
                 Just slot ->
-                    if slot.age >= ageLimit then
+                    if slot.age >= maxAge then
                         cueUnloadIdentifier slot.identifier
 
                     else
@@ -558,7 +576,7 @@ init _ =
       , plant = { hunger = hungerRefresh (plantMassToSize initPlantMass), mass = initPlantMass }
       , targets = Identified.empty
       }
-    , Cmd.batch (List.repeat 4 (Random.generate NewTarget genPersonDetails))
+    , Cmd.batch (List.repeat startSlots (Random.generate NewTarget genPersonDetails))
     )
 
 
@@ -598,10 +616,18 @@ update msg model =
                     eat model i
 
                 TargetExited i ->
+                    let
+                        afterUnload =
+                            unloadIdentifier i v
+                    in
                     ( { model
-                        | currentView = TargetSelect (unloadIdentifier i v)
+                        | currentView = TargetSelect afterUnload
                       }
-                    , Cmd.none
+                    , if allSlotsEmpty afterUnload then
+                        Random.generate NewTarget genPersonDetails
+
+                      else
+                        Cmd.none
                     )
 
         GameOver ->
@@ -623,7 +649,7 @@ eat model i =
 
                 newPlant =
                     { plant
-                        | hunger = max (plant.hunger + hungerRefresh (plantSize plant) - person.mass) 0
+                        | hunger = max minHunger (plant.hunger + hungerRefresh (plantSize plant) - person.mass)
                         , mass = plant.mass + person.mass
                     }
 
@@ -633,7 +659,7 @@ eat model i =
                             GameOver
 
                         TargetSelect v ->
-                            if newPlant.hunger > 10 then
+                            if newPlant.hunger > maxHunger then
                                 GameOver
 
                             else
@@ -814,6 +840,23 @@ optionOriginY index =
     toFloat index * (optionHeight + verticalMargin)
 
 
+normalise : Float -> Float -> Float -> Float
+normalise bottom top x =
+    (x - bottom) / (top - bottom)
+
+
+hungerBarColor : Float -> String
+hungerBarColor hunger =
+    if normalise minHunger maxHunger hunger < 0.5 then
+        "green"
+
+    else if normalise minHunger maxHunger hunger < 0.8 then
+        "yellow"
+
+    else
+        "red"
+
+
 viewPlant : Plant -> Svg Msg
 viewPlant plant =
     Svg.g
@@ -828,9 +871,26 @@ viewPlant plant =
         , Svg.text_
             [ translate 0 (1 * lineHeight), Svg.Attributes.fill "black" ]
             [ Svg.text ("Plant size: " ++ viewPlantSize plant) ]
-        , Svg.text_
-            [ translate 0 (2 * lineHeight), Svg.Attributes.fill "black" ]
-            [ Svg.text ("Plant hunger: " ++ String.fromFloat plant.hunger) ]
+        , Svg.rect
+            [ translate 0 (1 * lineHeight)
+            , Svg.Attributes.height (String.fromFloat lineHeight)
+            , Svg.Attributes.width (String.fromFloat plantWidth)
+            ]
+            []
+        , Svg.rect
+            [ translate 0 (1 * lineHeight)
+            , Svg.Attributes.height (String.fromFloat lineHeight)
+            , let
+                normalisedHunger =
+                    normalise minHunger maxHunger plant.hunger
+
+                width =
+                    interpolateFloat 0 plantWidth normalisedHunger
+              in
+              Svg.Attributes.width (String.fromFloat width)
+            , Svg.Attributes.fill (hungerBarColor plant.hunger)
+            ]
+            []
         ]
 
 
@@ -861,9 +921,12 @@ viewSlot index people slot =
     Svg.g
         (List.concat
             [ Animation.render slot.animation
-            , [ translate (optionOriginX index) (optionOriginY index)
-              , onClick (Select slot.identifier)
-              ]
+            , [ translate (optionOriginX index) (optionOriginY index) ]
+            , if not slot.fading then
+                [ onClick (Select slot.identifier) ]
+
+              else
+                []
             ]
         )
         [ Svg.rect
@@ -916,7 +979,7 @@ prettyFloat f =
 
 viewMass : Person -> String
 viewMass person =
-    prettyFloat (person.mass * 10) ++ "kg" ++ " (" ++ String.fromFloat person.mass ++ ")"
+    prettyFloat (interpolateFloat 40 100 person.mass) ++ "kg" ++ " (" ++ String.fromFloat person.mass ++ ")"
 
 
 viewSecurity : Person -> String
