@@ -68,22 +68,22 @@ type PlantSize
 
 
 type alias Plant =
-    { hunger : Int
-    , mass : Int
+    { hunger : Float
+    , mass : Float
     }
 
 
-plantMediumThreshold : Int
+plantMediumThreshold : Mass
 plantMediumThreshold =
     50
 
 
-plantLargeThreshold : Int
+plantLargeThreshold : Mass
 plantLargeThreshold =
     100
 
 
-plantMassToSize : Int -> PlantSize
+plantMassToSize : Mass -> PlantSize
 plantMassToSize mass =
     if mass < plantMediumThreshold then
         Small
@@ -100,7 +100,7 @@ plantSize plant =
     plantMassToSize plant.mass
 
 
-hungerRefresh : PlantSize -> Int
+hungerRefresh : PlantSize -> Float
 hungerRefresh size =
     case size of
         Small ->
@@ -118,7 +118,7 @@ type alias Name =
 
 
 type alias Mass =
-    Int
+    Float
 
 
 type alias Security =
@@ -193,7 +193,7 @@ genLastName =
 
 genMass : Random.Generator Mass
 genMass =
-    Random.int 1 10
+    Random.float 0 10
 
 
 genSecurity : Random.Generator Security
@@ -234,16 +234,23 @@ type View
     | GameOver
 
 
-type alias Slot =
-    { identifier : Identified.Identifier
-    , animation : Animation
-    }
-
-
 type alias TargetSelectView =
     { slots : Array (Maybe Slot)
     , queue : List Identified.Identifier
     }
+
+
+type alias Slot =
+    { identifier : Identified.Identifier
+    , age : Int
+    , fading : Bool
+    , animation : Animation
+    }
+
+
+newSlot : Identified.Identifier -> Slot
+newSlot identifier =
+    Slot identifier 0 False targetEnter
 
 
 enqueueIdentifier : Identified.Identifier -> TargetSelectView -> TargetSelectView
@@ -283,10 +290,7 @@ loadIdentifiers v =
                 Just i ->
                     let
                         value =
-                            Just
-                                { identifier = identifier
-                                , animation = targetEnter
-                                }
+                            Just (newSlot identifier)
                     in
                     loadIdentifiers { slots = Array.set i value v.slots, queue = newQueue }
 
@@ -301,7 +305,7 @@ getSlot identifier v =
                     Nothing
 
                 Just Nothing ->
-                    Nothing
+                    helper (i + 1)
 
                 Just (Just slot) ->
                     if identifier == slot.identifier then
@@ -313,6 +317,38 @@ getSlot identifier v =
     helper 0
 
 
+ageLimit : Int
+ageLimit =
+    3
+
+
+incrementAges : TargetSelectView -> TargetSelectView
+incrementAges v =
+    let
+        incrementAge : Slot -> Slot
+        incrementAge slot =
+            { slot | age = slot.age + 1 }
+
+        agedV : TargetSelectView
+        agedV =
+            { v | slots = Array.map (Maybe.map incrementAge) v.slots }
+
+        senesce : Maybe Slot -> TargetSelectView -> TargetSelectView
+        senesce maybeSlot =
+            case maybeSlot of
+                Nothing ->
+                    identity
+
+                Just slot ->
+                    if slot.age >= ageLimit then
+                        cueUnloadIdentifier slot.identifier
+
+                    else
+                        identity
+    in
+    Array.foldr senesce agedV agedV.slots
+
+
 cueUnloadIdentifier : Identified.Identifier -> TargetSelectView -> TargetSelectView
 cueUnloadIdentifier identifier v =
     case getSlot identifier v of
@@ -320,7 +356,12 @@ cueUnloadIdentifier identifier v =
             v
 
         Just ( index, slot ) ->
-            { v | slots = Array.set index (Just { slot | animation = targetExit identifier slot.animation }) v.slots }
+            -- It should be safe to unload slots repeatedly
+            if slot.fading then
+                v
+
+            else
+                { v | slots = Array.set index (Just { slot | fading = True, animation = targetExit identifier slot.animation }) v.slots }
 
 
 unloadIdentifier : Identified.Identifier -> TargetSelectView -> TargetSelectView
@@ -350,17 +391,17 @@ updateAnimations : TargetSelectView -> Animation.Msg -> ( TargetSelectView, Cmd 
 updateAnimations v animMsg =
     let
         updateSlotAnimation : Maybe Slot -> ( Maybe Slot, Maybe (Cmd Msg) )
-        updateSlotAnimation slot =
-            case slot of
+        updateSlotAnimation maybeSlot =
+            case maybeSlot of
                 Nothing ->
                     ( Nothing, Nothing )
 
-                Just { identifier, animation } ->
+                Just ({ animation } as slot) ->
                     let
                         ( newAnimation, cmd ) =
                             Animation.Messenger.update animMsg animation
                     in
-                    ( Just { identifier = identifier, animation = newAnimation }, Just cmd )
+                    ( Just { slot | animation = newAnimation }, Just cmd )
 
         ( newSlotsList, maybecmds ) =
             v.slots
@@ -394,7 +435,7 @@ init _ =
     )
 
 
-initPlantMass : Int
+initPlantMass : Mass
 initPlantMass =
     0
 
@@ -474,7 +515,7 @@ eat model i =
                                 GameOver
 
                             else
-                                TargetSelect (cueUnloadIdentifier i v)
+                                TargetSelect (incrementAges (cueUnloadIdentifier i v))
             in
             ( { model
                 | currentView = newView
@@ -667,7 +708,7 @@ viewPlant plant =
             [ Svg.text ("Plant size: " ++ viewPlantSize plant) ]
         , Svg.text_
             [ translate 0 (2 * lineHeight), Svg.Attributes.fill "black" ]
-            [ Svg.text ("Plant hunger: " ++ String.fromInt plant.hunger) ]
+            [ Svg.text ("Plant hunger: " ++ String.fromFloat plant.hunger) ]
         ]
 
 
@@ -737,9 +778,23 @@ viewFullName person =
     String.join " " [ person.firstName, Maybe.withDefault "" person.middleName, person.lastName ]
 
 
+roundTo : Int -> Float -> Float
+roundTo decimals f =
+    let
+        scale =
+            toFloat (10 ^ decimals)
+    in
+    toFloat (round (f * scale)) / scale
+
+
+prettyFloat : Float -> String
+prettyFloat f =
+    String.fromFloat (roundTo 2 f)
+
+
 viewMass : Person -> String
 viewMass person =
-    String.fromInt person.mass ++ "kg"
+    prettyFloat (person.mass * 10) ++ "kg" ++ " (" ++ String.fromFloat person.mass ++ ")"
 
 
 viewSecurity : Person -> String
