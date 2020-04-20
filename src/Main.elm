@@ -780,9 +780,35 @@ verticalMargin =
     5
 
 
+fontSize : Float
+fontSize =
+    20
+
+
+{-| Padding _within_ text lines
+-}
+textPadding : Float
+textPadding =
+    2
+
+
+{-| How much to move text up by to pretend the achor is at the bottom rather than at the line
+-}
+textOffset : Float
+textOffset =
+    4
+
+
+{-| Padding _around_ text lines
+-}
+textMargin : Float
+textMargin =
+    5
+
+
 lineHeight : Float
 lineHeight =
-    15
+    fontSize + 2 * textPadding
 
 
 plantOriginX : Float
@@ -797,7 +823,7 @@ plantOriginY =
 
 plantHeight : Float
 plantHeight =
-    2 * lineHeight
+    2 * lineHeight + 2 * textMargin
 
 
 plantWidth : Float
@@ -817,7 +843,7 @@ optionsOriginY =
 
 optionHeight : Float
 optionHeight =
-    6 * lineHeight
+    6 * lineHeight + 2 * textMargin
 
 
 optionWidth : Float
@@ -845,6 +871,21 @@ normalise bottom top x =
     (x - bottom) / (top - bottom)
 
 
+hungerBarMargin : Float
+hungerBarMargin =
+    textMargin
+
+
+hungerBarHeight : Float
+hungerBarHeight =
+    lineHeight - 2 * hungerBarMargin
+
+
+hungerBarWidth : Float
+hungerBarWidth =
+    plantWidth - 2 * textMargin - 2 * hungerBarMargin
+
+
 hungerBarColor : Float -> String
 hungerBarColor hunger =
     if normalise minHunger maxHunger hunger < 0.5 then
@@ -855,6 +896,22 @@ hungerBarColor hunger =
 
     else
         "red"
+
+
+hungerBarCornerRounding : Float
+hungerBarCornerRounding =
+    hungerBarHeight / 2
+
+
+textLine : Int -> String -> Svg Msg
+textLine i s =
+    Svg.text_
+        -- Text is anchored at the bottom, so we translate up to pad.
+        [ translate textPadding (toFloat (i + 1) * lineHeight - textPadding - textOffset)
+        , Svg.Attributes.fill "black"
+        , Svg.Attributes.fontSize (String.fromFloat fontSize)
+        ]
+        [ Svg.text s ]
 
 
 viewPlant : Plant -> Svg Msg
@@ -868,29 +925,45 @@ viewPlant plant =
             , Svg.Attributes.fill "grey"
             ]
             []
-        , Svg.text_
-            [ translate 0 (1 * lineHeight), Svg.Attributes.fill "black" ]
-            [ Svg.text ("Plant size: " ++ viewPlantSize plant) ]
-        , Svg.rect
-            [ translate 0 (1 * lineHeight)
-            , Svg.Attributes.height (String.fromFloat lineHeight)
-            , Svg.Attributes.width (String.fromFloat plantWidth)
-            ]
-            []
-        , Svg.rect
-            [ translate 0 (1 * lineHeight)
-            , Svg.Attributes.height (String.fromFloat lineHeight)
-            , let
-                normalisedHunger =
-                    normalise minHunger maxHunger plant.hunger
+        , Svg.g
+            [ translate textMargin textMargin ]
+            [ textLine 0 ("Plant size: " ++ viewPlantSize plant)
+            , Svg.clipPath
+                [ Svg.Attributes.id "hungerBarClip"
+                , Svg.Attributes.clipPathUnits "userSpaceOnUse"
+                ]
+                [ Svg.rect
+                    [ Svg.Attributes.height (String.fromFloat hungerBarHeight)
+                    , Svg.Attributes.width (String.fromFloat hungerBarWidth)
+                    , Svg.Attributes.rx (String.fromFloat hungerBarCornerRounding)
+                    , Svg.Attributes.ry (String.fromFloat hungerBarCornerRounding)
+                    ]
+                    []
+                ]
+            , Svg.rect
+                [ translate hungerBarMargin (1 * lineHeight + hungerBarMargin)
+                , Svg.Attributes.height (String.fromFloat hungerBarHeight)
+                , Svg.Attributes.width (String.fromFloat hungerBarWidth)
+                , Svg.Attributes.clipPath "url(#hungerBarClip)"
+                ]
+                []
+            , Svg.rect
+                [ translate hungerBarMargin (1 * lineHeight + hungerBarMargin)
+                , Svg.Attributes.height (String.fromFloat hungerBarHeight)
+                , Svg.Attributes.width (String.fromFloat hungerBarWidth)
+                , let
+                    normalisedHunger =
+                        normalise minHunger maxHunger plant.hunger
 
-                width =
-                    interpolateFloat 0 plantWidth normalisedHunger
-              in
-              Svg.Attributes.width (String.fromFloat width)
-            , Svg.Attributes.fill (hungerBarColor plant.hunger)
+                    width =
+                        interpolateFloat 0 hungerBarWidth normalisedHunger
+                  in
+                  Svg.Attributes.width (String.fromFloat width)
+                , Svg.Attributes.fill (hungerBarColor plant.hunger)
+                , Svg.Attributes.clipPath "url(#hungerBarClip)"
+                ]
+                []
             ]
-            []
         ]
 
 
@@ -937,24 +1010,15 @@ viewSlot index people slot =
             , Svg.Attributes.fill "grey"
             ]
             []
-        , Svg.text_
-            [ translate 0 (lineHeight * 1), Svg.Attributes.fill "black" ]
-            [ Svg.text ("Id: " ++ identifierToString slot.identifier) ]
-        , Svg.text_
-            [ translate 0 (lineHeight * 2), Svg.Attributes.fill "black" ]
-            [ Svg.text ("Name: " ++ viewFullName person) ]
-        , Svg.text_
-            [ translate 0 (lineHeight * 3), Svg.Attributes.fill "black" ]
-            [ Svg.text ("Mass: " ++ viewMass person) ]
-        , Svg.text_
-            [ translate 0 (lineHeight * 4), Svg.Attributes.fill "black" ]
-            [ Svg.text ("Security: " ++ viewSecurity person) ]
-        , Svg.text_
-            [ translate 0 (lineHeight * 5), Svg.Attributes.fill "black" ]
-            [ Svg.text ("Popularity: " ++ viewPopularity person) ]
-        , Svg.text_
-            [ translate 0 (lineHeight * 6), Svg.Attributes.fill "black" ]
-            [ Svg.text ("Goodness: " ++ viewGoodness person) ]
+        , Svg.g
+            [ translate textMargin textMargin ]
+            [ textLine 0 ("Id: " ++ identifierToString slot.identifier)
+            , textLine 1 ("Name: " ++ viewFullName person)
+            , textLine 2 ("Mass: " ++ viewMass person)
+            , textLine 3 ("Security: " ++ viewSecurity person)
+            , textLine 4 ("Popularity: " ++ viewPopularity person)
+            , textLine 5 ("Goodness: " ++ viewGoodness person)
+            ]
         ]
 
 
