@@ -11,6 +11,7 @@ import Animation.Messenger
 import Array exposing (Array)
 import Browser
 import Html exposing (Html)
+import Html.Attributes
 import Html.Events exposing (onClick)
 import Identified exposing (Identified, identifierToString)
 import List
@@ -45,6 +46,88 @@ fork f g h a b =
 
 
 
+-- Utilities
+
+
+normalise : Float -> Float -> Float -> Float
+normalise bottom top x =
+    (x - bottom) / (top - bottom)
+
+
+translate : Float -> Float -> Html.Attribute Msg
+translate a b =
+    Svg.Attributes.transform (String.concat [ "translate(", String.fromFloat a, ",", String.fromFloat b, ")" ])
+
+
+catMaybes : List (Maybe a) -> List a
+catMaybes l =
+    case l of
+        [] ->
+            []
+
+        Nothing :: xs ->
+            catMaybes xs
+
+        (Just x) :: xs ->
+            x :: catMaybes xs
+
+
+interpolateFloat : Float -> Float -> Float -> Float
+interpolateFloat bottom top x =
+    bottom + x * (top - bottom)
+
+
+interpolateInt : Int -> Int -> Float -> Int
+interpolateInt bottom top x =
+    floor (toFloat bottom + x * toFloat (1 + top - bottom))
+
+
+interpolateColor : Animation.Color -> Animation.Color -> Float -> Animation.Color
+interpolateColor bottom top x =
+    { red = interpolateInt bottom.red top.red x
+    , green = interpolateInt bottom.green top.green x
+    , blue = interpolateInt bottom.blue top.blue x
+    , alpha = interpolateFloat bottom.alpha top.alpha x
+    }
+
+
+{-| A colormap is a list of color keyframes and cut off points.
+-}
+type alias ColorMap =
+    { low : Animation.Color
+    , high : Animation.Color
+    , lowestTone : ( Float, Animation.Color )
+    , otherTones : List ( Float, Animation.Color )
+    }
+
+
+applyColorMap : ColorMap -> Float -> Animation.Color
+applyColorMap { low, high, lowestTone, otherTones } x =
+    let
+        ( lowestThresh, _ ) =
+            lowestTone
+
+        helper : ( Float, Animation.Color ) -> List ( Float, Animation.Color ) -> Animation.Color
+        helper ( lowThresh, lower ) l =
+            case l of
+                [] ->
+                    high
+
+                ( highThresh, higher ) :: rest ->
+                    if x < highThresh then
+                        interpolateColor lower higher (normalise lowThresh highThresh x)
+
+                    else
+                        helper ( highThresh, higher ) rest
+    in
+    if x < lowestThresh then
+        low
+
+    else
+        helper lowestTone otherTones
+
+
+
 -- Game parameters
 
 
@@ -61,6 +144,11 @@ startSlots =
 initPlantMass : Mass
 initPlantMass =
     0
+
+
+initPlantHunger : Float
+initPlantHunger =
+    hungerRefresh (plantMassToSize initPlantMass)
 
 
 plantMediumThreshold : Mass
@@ -316,16 +404,6 @@ genLastName =
     Random.uniform someLastName otherLastNames
 
 
-interpolateFloat : Float -> Float -> Float -> Float
-interpolateFloat bottom top x =
-    bottom + x * (top - bottom)
-
-
-interpolateInt : Int -> Int -> Float -> Int
-interpolateInt bottom top x =
-    floor (toFloat bottom + x * toFloat (1 + top - bottom))
-
-
 genMass : Float -> Random.Generator Mass
 genMass seed =
     Random.constant (interpolateFloat minMass maxMass seed)
@@ -346,24 +424,6 @@ genGoodness seed =
     Random.constant (interpolateInt minGoodness maxGoodness seed)
 
 
-transparent : Animation
-transparent =
-    Animation.style [ Animation.opacity 0.0 ]
-
-
-targetEnter : Animation
-targetEnter =
-    Animation.interrupt [ Animation.to [ Animation.opacity 1.0 ] ] transparent
-
-
-targetExit : Identified.Identifier -> Animation -> Animation
-targetExit i =
-    Animation.interrupt
-        [ Animation.to [ Animation.opacity 0.0 ]
-        , Animation.Messenger.send (TargetExited i)
-        ]
-
-
 type View
     = TargetSelect TargetSelectView
     | GameOver
@@ -372,6 +432,7 @@ type View
 type alias TargetSelectView =
     { slots : Array (Maybe Slot)
     , queue : List Identified.Identifier
+    , hungerBarAnimation : Animation
     }
 
 
@@ -442,7 +503,7 @@ loadIdentifiers v =
                         value =
                             Just (newSlot identifier)
                     in
-                    loadIdentifiers { slots = Array.set i value v.slots, queue = newQueue }
+                    loadIdentifiers { v | slots = Array.set i value v.slots, queue = newQueue }
 
 
 getSlot : Identified.Identifier -> TargetSelectView -> Maybe ( Int, Slot )
@@ -519,17 +580,9 @@ unloadIdentifier identifier v =
             loadIdentifiers { v | slots = Array.set index Nothing v.slots }
 
 
-catMaybes : List (Maybe a) -> List a
-catMaybes l =
-    case l of
-        [] ->
-            []
-
-        Nothing :: xs ->
-            catMaybes xs
-
-        (Just x) :: xs ->
-            x :: catMaybes xs
+setHungerBarAnimation : Plant -> TargetSelectView -> TargetSelectView
+setHungerBarAnimation plant v =
+    { v | hungerBarAnimation = hungerBarUpdateAnimation plant v.hungerBarAnimation }
 
 
 updateAnimations : TargetSelectView -> Animation.Msg -> ( TargetSelectView, Cmd Msg )
@@ -557,10 +610,13 @@ updateAnimations v animMsg =
         newSlots =
             Array.fromList newSlotsList
 
+        ( newHungerBarAnimation, hungerBarCmd ) =
+            Animation.Messenger.update animMsg v.hungerBarAnimation
+
         cmds =
-            catMaybes maybecmds
+            hungerBarCmd :: catMaybes maybecmds
     in
-    ( { v | slots = newSlots }, Cmd.batch cmds )
+    ( { v | slots = newSlots, hungerBarAnimation = newHungerBarAnimation }, Cmd.batch cmds )
 
 
 type alias Model =
@@ -572,9 +628,23 @@ type alias Model =
 
 init : () -> ( Model, Cmd Msg )
 init _ =
-    ( { currentView = TargetSelect { slots = Array.repeat numSlots Nothing, queue = [] }
-      , plant = { hunger = hungerRefresh (plantMassToSize initPlantMass), mass = initPlantMass }
-      , targets = Identified.empty
+    let
+        plant =
+            { hunger = initPlantHunger, mass = initPlantMass }
+
+        targets =
+            Identified.empty
+
+        currentView =
+            TargetSelect
+                { slots = Array.repeat numSlots Nothing
+                , queue = []
+                , hungerBarAnimation = hungerBarInitAnimation plant
+                }
+    in
+    ( { currentView = currentView
+      , plant = plant
+      , targets = targets
       }
     , Cmd.batch (List.repeat startSlots (Random.generate NewTarget genPersonDetails))
     )
@@ -663,7 +733,11 @@ eat model i =
                                 GameOver
 
                             else
-                                TargetSelect (incrementAges (cueUnloadIdentifier i v))
+                                v
+                                    |> cueUnloadIdentifier i
+                                    |> incrementAges
+                                    |> setHungerBarAnimation newPlant
+                                    |> TargetSelect
             in
             ( { model
                 | currentView = newView
@@ -717,7 +791,7 @@ view model =
                         , Svg.Attributes.fill "black"
                         ]
                         []
-                    , viewPlant model.plant
+                    , viewPlant v model.plant
                     , v.slots
                         |> Array.toList
                         |> indexedMap (\i -> Maybe.map (viewSlot i model.targets))
@@ -866,11 +940,6 @@ optionOriginY index =
     toFloat index * (optionHeight + verticalMargin)
 
 
-normalise : Float -> Float -> Float -> Float
-normalise bottom top x =
-    (x - bottom) / (top - bottom)
-
-
 hungerBarMargin : Float
 hungerBarMargin =
     textMargin
@@ -886,21 +955,52 @@ hungerBarWidth =
     plantWidth - 2 * textMargin - 2 * hungerBarMargin
 
 
-hungerBarColor : Float -> String
+hungerBarColorMap : ColorMap
+hungerBarColorMap =
+    { low = Animation.Color 0 255 0 1
+    , high = Animation.Color 255 0 0 1
+    , lowestTone = ( 0, Animation.Color 0 255 0 1 )
+    , otherTones =
+        [ ( 0.5, Animation.Color 255 255 0 1 )
+        , ( 1.0, Animation.Color 255 0 0 1 )
+        ]
+    }
+
+
+hungerBarColor : Float -> Animation.Color
 hungerBarColor hunger =
-    if normalise minHunger maxHunger hunger < 0.5 then
-        "green"
-
-    else if normalise minHunger maxHunger hunger < 0.8 then
-        "yellow"
-
-    else
-        "red"
+    applyColorMap hungerBarColorMap (normalise minHunger maxHunger hunger)
 
 
 hungerBarCornerRounding : Float
 hungerBarCornerRounding =
     hungerBarHeight / 2
+
+
+hungerBarInitAnimation : Plant -> Animation
+hungerBarInitAnimation plant =
+    Animation.style
+        [ Animation.width (Animation.px 0)
+        , Animation.fill (hungerBarColor minHunger)
+        ]
+        |> hungerBarUpdateAnimation plant
+
+
+hungerBarUpdateAnimation : Plant -> Animation -> Animation
+hungerBarUpdateAnimation plant =
+    let
+        normalisedHunger =
+            normalise minHunger maxHunger plant.hunger
+
+        width =
+            interpolateFloat 0 hungerBarWidth normalisedHunger
+    in
+    Animation.interrupt
+        [ Animation.to
+            [ Animation.width (Animation.px width)
+            , Animation.fill (hungerBarColor plant.hunger)
+            ]
+        ]
 
 
 textLine : Int -> String -> Svg Msg
@@ -914,8 +1014,8 @@ textLine i s =
         [ Svg.text s ]
 
 
-viewPlant : Plant -> Svg Msg
-viewPlant plant =
+viewPlant : TargetSelectView -> Plant -> Svg Msg
+viewPlant v plant =
     Svg.g
         [ translate plantOriginX plantOriginY
         ]
@@ -948,20 +1048,22 @@ viewPlant plant =
                 ]
                 []
             , Svg.rect
-                [ translate hungerBarMargin (1 * lineHeight + hungerBarMargin)
-                , Svg.Attributes.height (String.fromFloat hungerBarHeight)
-                , Svg.Attributes.width (String.fromFloat hungerBarWidth)
-                , let
-                    normalisedHunger =
-                        normalise minHunger maxHunger plant.hunger
+                (List.concat
+                    [ Animation.render v.hungerBarAnimation
+                    , [ translate hungerBarMargin (1 * lineHeight + hungerBarMargin)
+                      , Svg.Attributes.height (String.fromFloat hungerBarHeight)
+                      , let
+                            normalisedHunger =
+                                normalise minHunger maxHunger plant.hunger
 
-                    width =
-                        interpolateFloat 0 hungerBarWidth normalisedHunger
-                  in
-                  Svg.Attributes.width (String.fromFloat width)
-                , Svg.Attributes.fill (hungerBarColor plant.hunger)
-                , Svg.Attributes.clipPath "url(#hungerBarClip)"
-                ]
+                            width =
+                                interpolateFloat 0 hungerBarWidth normalisedHunger
+                        in
+                        Svg.Attributes.width (String.fromFloat width)
+                      , Svg.Attributes.clipPath "url(#hungerBarClip)"
+                      ]
+                    ]
+                )
                 []
             ]
         ]
@@ -980,9 +1082,22 @@ viewPlantSize plant =
             "large"
 
 
-translate : Float -> Float -> Html.Attribute Msg
-translate a b =
-    Svg.Attributes.transform (String.concat [ "translate(", String.fromFloat a, ",", String.fromFloat b, ")" ])
+transparent : Animation
+transparent =
+    Animation.style [ Animation.opacity 0.0 ]
+
+
+targetEnter : Animation
+targetEnter =
+    Animation.interrupt [ Animation.to [ Animation.opacity 1.0 ] ] transparent
+
+
+targetExit : Identified.Identifier -> Animation -> Animation
+targetExit i =
+    Animation.interrupt
+        [ Animation.to [ Animation.opacity 0.0 ]
+        , Animation.Messenger.send (TargetExited i)
+        ]
 
 
 viewSlot : Int -> Identified Person -> Slot -> Svg Msg
