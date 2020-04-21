@@ -11,6 +11,7 @@
             "elm/html": "1.0.0",
             "elm/random": "1.0.0",
             "elm/svg": "1.0.1",
+            "folkertdev/elm-state": "3.0.1",
             "mdgriffith/elm-style-animation": "4.0.0"
         },
         "indirect": {

@@ -10,12 +10,14 @@ import Animation
 import Animation.Messenger
 import Array exposing (Array)
 import Browser
+import CmdState exposing (CmdState)
 import Html exposing (Html)
 import Html.Attributes
 import Html.Events exposing (onClick)
 import Identified exposing (Identified, identifierToString)
 import List
 import Random
+import Set exposing (Set)
 import Svg exposing (Svg)
 import Svg.Attributes
 import Svg.Keyed
@@ -424,6 +426,15 @@ genGoodness seed =
     Random.constant (interpolateInt minGoodness maxGoodness seed)
 
 
+type alias Model =
+    { currentView : View
+    , freshAnimationIdentifier : AnimationIdentifier
+    , animationsRunning : Set AnimationIdentifier
+    , plant : Plant
+    , targets : Identified Person
+    }
+
+
 type View
     = TargetSelect TargetSelectView
     | GameOver
@@ -444,12 +455,12 @@ type alias Slot =
     }
 
 
-newSlot : Identified.Identifier -> Slot
+newSlot : Identified.Identifier -> CmdState Msg Model Slot
 newSlot identifier =
-    Slot identifier 0 False targetEnter
+    targetEnter identifier |> CmdState.map (\animation -> Slot identifier 0 False animation)
 
 
-enqueueIdentifier : Identified.Identifier -> TargetSelectView -> TargetSelectView
+enqueueIdentifier : Identified.Identifier -> TargetSelectView -> CmdState Msg Model TargetSelectView
 enqueueIdentifier i v =
     loadIdentifiers { v | queue = i :: v.queue }
 
@@ -487,23 +498,26 @@ allSlotsEmpty v =
     Array.foldr (&&) True (Array.map (not << isJust) v.slots)
 
 
-loadIdentifiers : TargetSelectView -> TargetSelectView
+loadIdentifiers : TargetSelectView -> CmdState Msg Model TargetSelectView
 loadIdentifiers v =
     case v.queue of
         [] ->
-            v
+            CmdState.state v
 
         identifier :: newQueue ->
             case firstEmptySlot v of
                 Nothing ->
-                    v
+                    CmdState.state v
 
                 Just i ->
                     let
-                        value =
-                            Just (newSlot identifier)
+                        setSlotAndQueue : Slot -> TargetSelectView
+                        setSlotAndQueue slot =
+                            { v | slots = Array.set i (Just slot) v.slots, queue = newQueue }
                     in
-                    loadIdentifiers { v | slots = Array.set i value v.slots, queue = newQueue }
+                    newSlot identifier
+                        |> CmdState.map setSlotAndQueue
+                        |> CmdState.andThen loadIdentifiers
 
 
 getSlot : Identified.Identifier -> TargetSelectView -> Maybe ( Int, Slot )
@@ -528,7 +542,7 @@ getSlot identifier v =
     helper 0
 
 
-incrementAges : TargetSelectView -> TargetSelectView
+incrementAges : TargetSelectView -> CmdState Msg Model TargetSelectView
 incrementAges v =
     let
         incrementAge : Slot -> Slot
@@ -539,7 +553,7 @@ incrementAges v =
         agedV =
             { v | slots = Array.map (Maybe.map incrementAge) v.slots }
 
-        senesce : Maybe Slot -> TargetSelectView -> TargetSelectView
+        senesce : Maybe Slot -> CmdState Msg Model TargetSelectView -> CmdState Msg Model TargetSelectView
         senesce maybeSlot =
             case maybeSlot of
                 Nothing ->
@@ -547,83 +561,72 @@ incrementAges v =
 
                 Just slot ->
                     if slot.age >= maxAge then
-                        cueUnloadIdentifier slot.identifier
+                        CmdState.andThen (cueUnloadIdentifier slot.identifier)
 
                     else
                         identity
     in
-    Array.foldr senesce agedV agedV.slots
+    Array.foldr senesce (CmdState.state agedV) agedV.slots
 
 
-cueUnloadIdentifier : Identified.Identifier -> TargetSelectView -> TargetSelectView
+cueUnloadIdentifier : Identified.Identifier -> TargetSelectView -> CmdState Msg Model TargetSelectView
 cueUnloadIdentifier identifier v =
     case getSlot identifier v of
         Nothing ->
-            v
+            CmdState.state v
 
         Just ( index, slot ) ->
             -- It should be safe to unload slots repeatedly
             if slot.fading then
-                v
+                CmdState.state v
 
             else
-                { v | slots = Array.set index (Just { slot | fading = True, animation = targetExit identifier slot.animation }) v.slots }
+                targetExit identifier slot.animation
+                    |> CmdState.map (\animation -> { v | slots = Array.set index (Just { slot | fading = True, animation = animation }) v.slots })
 
 
-unloadIdentifier : Identified.Identifier -> TargetSelectView -> TargetSelectView
+unloadIdentifier : Identified.Identifier -> TargetSelectView -> CmdState Msg Model TargetSelectView
 unloadIdentifier identifier v =
     case getSlot identifier v of
         Nothing ->
-            v
+            CmdState.state v
 
         Just ( index, _ ) ->
             loadIdentifiers { v | slots = Array.set index Nothing v.slots }
 
 
-setHungerBarAnimation : Plant -> TargetSelectView -> TargetSelectView
+setHungerBarAnimation : Plant -> TargetSelectView -> CmdState Msg Model TargetSelectView
 setHungerBarAnimation plant v =
-    { v | hungerBarAnimation = hungerBarUpdateAnimation plant v.hungerBarAnimation }
+    hungerBarUpdateAnimation plant v.hungerBarAnimation
+        |> CmdState.map (\animation -> { v | hungerBarAnimation = animation })
 
 
-updateAnimations : TargetSelectView -> Animation.Msg -> ( TargetSelectView, Cmd Msg )
-updateAnimations v animMsg =
-    let
-        updateSlotAnimation : Maybe Slot -> ( Maybe Slot, Maybe (Cmd Msg) )
-        updateSlotAnimation maybeSlot =
-            case maybeSlot of
-                Nothing ->
-                    ( Nothing, Nothing )
-
-                Just ({ animation } as slot) ->
-                    let
-                        ( newAnimation, cmd ) =
-                            Animation.Messenger.update animMsg animation
-                    in
-                    ( Just { slot | animation = newAnimation }, Just cmd )
-
-        ( newSlotsList, maybecmds ) =
-            v.slots
-                |> Array.toList
-                |> List.map updateSlotAnimation
-                |> List.unzip
-
-        newSlots =
-            Array.fromList newSlotsList
-
-        ( newHungerBarAnimation, hungerBarCmd ) =
-            Animation.Messenger.update animMsg v.hungerBarAnimation
-
-        cmds =
-            hungerBarCmd :: catMaybes maybecmds
-    in
-    ( { v | slots = newSlots, hungerBarAnimation = newHungerBarAnimation }, Cmd.batch cmds )
+type alias AnimationIdentifier =
+    Int
 
 
-type alias Model =
-    { currentView : View
-    , plant : Plant
-    , targets : Identified Person
-    }
+animationStart : CmdState Msg Model AnimationIdentifier
+animationStart =
+    CmdState.get
+        |> CmdState.andThen
+            (\model ->
+                CmdState.put
+                    { model
+                        | freshAnimationIdentifier = model.freshAnimationIdentifier + 1
+                        , animationsRunning = Set.insert model.freshAnimationIdentifier model.animationsRunning
+                    }
+                    |> CmdState.andThen (\_ -> CmdState.state model.freshAnimationIdentifier)
+            )
+
+
+animationDone : AnimationIdentifier -> CmdState Msg Model ()
+animationDone animationIdentifier =
+    CmdState.modify (\model -> { model | animationsRunning = Set.remove animationIdentifier model.animationsRunning })
+
+
+anyAnimationsRunning : Model -> Bool
+anyAnimationsRunning =
+    not << Set.isEmpty << .animationsRunning
 
 
 init : () -> ( Model, Cmd Msg )
@@ -639,112 +642,221 @@ init _ =
             TargetSelect
                 { slots = Array.repeat numSlots Nothing
                 , queue = []
-                , hungerBarAnimation = hungerBarInitAnimation plant
+                , hungerBarAnimation = hungerBarInitAnimation plant 0
                 }
+
+        initModel : Model
+        initModel =
+            { currentView = currentView
+            , freshAnimationIdentifier = 1
+            , animationsRunning = Set.singleton 0
+            , plant = plant
+            , targets = targets
+            }
     in
-    ( { currentView = currentView
-      , plant = plant
-      , targets = targets
-      }
-    , Cmd.batch (List.repeat startSlots (Random.generate NewTarget genPersonDetails))
-    )
+    ( initModel, Cmd.batch (List.repeat startSlots (Random.generate NewTarget genPersonDetails)) )
 
 
 
 -- UPDATE
 
 
+type AnimationType
+    = SlotEnter Identified.Identifier
+    | SlotExit Identified.Identifier
+    | HungerBarUpdate
+
+
 type Msg
     = Animate Animation.Msg
     | NewTarget Person
     | Select Identified.Identifier
-    | TargetExited Identified.Identifier
+    | AnimationDone AnimationIdentifier AnimationType
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
-    case model.currentView of
-        TargetSelect v ->
-            case msg of
-                Animate animMsg ->
+    CmdState.finalState model Cmd.none (update_ msg)
+
+
+update_ : Msg -> CmdState Msg Model ()
+update_ msg =
+    case msg of
+        Animate animMsg ->
+            updateAnimate animMsg
+
+        AnimationDone animationIdentifier animationType ->
+            animationDone animationIdentifier
+                |> CmdState.andThen (\_ -> updateOnAnimationDone animationType)
+
+        NewTarget person ->
+            updateNewTarget person
+
+        Select identifier ->
+            updateSelect identifier
+
+
+updateAnimate : Animation.Msg -> CmdState Msg Model ()
+updateAnimate animMsg =
+    let
+        updateSlotAnimation : Maybe Slot -> ( Maybe Slot, Maybe (Cmd Msg) )
+        updateSlotAnimation maybeSlot =
+            case maybeSlot of
+                Nothing ->
+                    ( Nothing, Nothing )
+
+                Just ({ animation } as slot) ->
                     let
-                        ( newV, cmd ) =
-                            updateAnimations v animMsg
+                        ( newAnimation, cmd ) =
+                            Animation.Messenger.update animMsg animation
                     in
-                    ( { model | currentView = TargetSelect newV }, cmd )
+                    ( Just { slot | animation = newAnimation }, Just cmd )
 
-                NewTarget person ->
-                    let
-                        ( i, targets ) =
-                            Identified.append person model.targets
-                    in
-                    ( { model | currentView = TargetSelect (enqueueIdentifier i v), targets = targets }
-                    , Cmd.none
-                    )
-
-                Select i ->
-                    eat model i
-
-                TargetExited i ->
-                    let
-                        afterUnload =
-                            unloadIdentifier i v
-                    in
-                    ( { model
-                        | currentView = TargetSelect afterUnload
-                      }
-                    , if allSlotsEmpty afterUnload then
-                        Random.generate NewTarget genPersonDetails
-
-                      else
-                        Cmd.none
-                    )
-
-        GameOver ->
-            ( model, Cmd.none )
-
-
-{-| Have the plant eat the person with identifier i
--}
-eat : Model -> Identified.Identifier -> ( Model, Cmd Msg )
-eat model i =
-    case Identified.get i model.targets of
-        Nothing ->
-            ( model, Cmd.none )
-
-        Just person ->
+        updateTargetSelectAnimations : TargetSelectView -> CmdState Msg Model ()
+        updateTargetSelectAnimations v =
             let
-                plant =
-                    model.plant
+                ( newSlotsList, maybecmds ) =
+                    v.slots
+                        |> Array.toList
+                        |> List.map updateSlotAnimation
+                        |> List.unzip
 
-                newPlant =
-                    { plant
-                        | hunger = max minHunger (plant.hunger + hungerRefresh (plantSize plant) - person.mass)
-                        , mass = plant.mass + person.mass
-                    }
+                newSlots =
+                    Array.fromList newSlotsList
 
-                newView =
-                    case model.currentView of
-                        GameOver ->
-                            GameOver
+                ( newHungerBarAnimation, hungerBarCmd ) =
+                    Animation.Messenger.update animMsg v.hungerBarAnimation
 
-                        TargetSelect v ->
-                            if newPlant.hunger > maxHunger then
-                                GameOver
+                cmds =
+                    hungerBarCmd :: catMaybes maybecmds
 
-                            else
-                                v
-                                    |> cueUnloadIdentifier i
-                                    |> incrementAges
-                                    |> setHungerBarAnimation newPlant
-                                    |> TargetSelect
+                newV =
+                    { v | slots = newSlots, hungerBarAnimation = newHungerBarAnimation }
             in
-            ( { model
-                | currentView = newView
-                , plant = newPlant
-              }
-            , Cmd.batch (List.repeat person.popularity (Random.generate NewTarget genPersonDetails))
+            CmdState.batchCommands cmds
+                |> CmdState.andThen (\_ -> setCurrentView (TargetSelect newV))
+    in
+    ifTargetSelect updateTargetSelectAnimations (CmdState.state ())
+
+
+andThenSilently : (a -> CmdState Msg Model b) -> CmdState Msg Model a -> CmdState Msg Model a
+andThenSilently f =
+    CmdState.andThen (\a -> CmdState.andThen (always (CmdState.state a)) (f a))
+
+
+setCurrentView : View -> CmdState Msg Model ()
+setCurrentView currentView =
+    CmdState.modify (\model -> { model | currentView = currentView })
+
+
+ifTargetSelect : (TargetSelectView -> CmdState Msg Model a) -> CmdState Msg Model a -> CmdState Msg Model a
+ifTargetSelect if_ else_ =
+    CmdState.get
+        |> CmdState.andThen
+            (\model ->
+                case model.currentView of
+                    TargetSelect v ->
+                        if_ v
+
+                    _ ->
+                        else_
             )
+
+
+updateOnAnimationDone : AnimationType -> CmdState Msg Model ()
+updateOnAnimationDone animationType =
+    case animationType of
+        SlotExit i ->
+            let
+                updateTargetSelect : TargetSelectView -> CmdState Msg Model ()
+                updateTargetSelect v =
+                    unloadIdentifier i v
+                        |> andThenSilently (\v_ -> setCurrentView (TargetSelect v_))
+                        |> CmdState.andThen spawnPersonIfAllSlotsEmpty
+
+                spawnPersonIfAllSlotsEmpty : TargetSelectView -> CmdState Msg Model ()
+                spawnPersonIfAllSlotsEmpty v =
+                    if allSlotsEmpty v then
+                        CmdState.batchCommands [ Random.generate NewTarget genPersonDetails ]
+
+                    else
+                        CmdState.state ()
+            in
+            ifTargetSelect updateTargetSelect (CmdState.state ())
+
+        HungerBarUpdate ->
+            CmdState.get
+                |> CmdState.andThen
+                    (\model ->
+                        if model.plant.hunger > maxHunger then
+                            setCurrentView GameOver
+
+                        else
+                            CmdState.state ()
+                    )
+
+        _ ->
+            CmdState.state ()
+
+
+updateNewTarget : Person -> CmdState Msg Model ()
+updateNewTarget person =
+    let
+        updateTargetSelect : TargetSelectView -> CmdState Msg Model ()
+        updateTargetSelect v =
+            CmdState.get
+                |> CmdState.andThen
+                    (\model ->
+                        let
+                            ( i, newTargets ) =
+                                Identified.append person model.targets
+                        in
+                        enqueueIdentifier i v
+                            |> CmdState.andThen (\v_ -> CmdState.put { model | currentView = TargetSelect v_, targets = newTargets })
+                    )
+    in
+    ifTargetSelect updateTargetSelect (CmdState.state ())
+
+
+updateSelect : Identified.Identifier -> CmdState Msg Model ()
+updateSelect identifier =
+    let
+        updateView : TargetSelectView -> Plant -> CmdState Msg Model ()
+        updateView v plant =
+            cueUnloadIdentifier identifier v
+                |> CmdState.andThen incrementAges
+                |> CmdState.andThen (setHungerBarAnimation plant)
+                |> CmdState.andThen (setCurrentView << TargetSelect)
+
+        updateTargetSelect : TargetSelectView -> CmdState Msg Model ()
+        updateTargetSelect v =
+            CmdState.get
+                |> CmdState.andThen
+                    (\model ->
+                        case Identified.get identifier model.targets of
+                            Nothing ->
+                                CmdState.state ()
+
+                            Just person ->
+                                let
+                                    plant =
+                                        model.plant
+
+                                    newPlant =
+                                        { plant
+                                            | hunger = max minHunger (plant.hunger + hungerRefresh (plantSize plant) - person.mass)
+                                            , mass = plant.mass + person.mass
+                                        }
+
+                                    cmds =
+                                        List.repeat person.popularity (Random.generate NewTarget genPersonDetails)
+                                in
+                                updateView v newPlant
+                                    |> CmdState.andThen (\_ -> CmdState.modify (\model_ -> { model_ | plant = newPlant }))
+                                    |> CmdState.andThen (\_ -> CmdState.batchCommands cmds)
+                    )
+    in
+    ifTargetSelect updateTargetSelect (CmdState.state ())
 
 
 
@@ -761,10 +873,13 @@ subscriptions model =
             let
                 animations : List Animation
                 animations =
-                    v.slots
-                        |> Array.toList
-                        |> catMaybes
-                        |> List.map .animation
+                    List.concat
+                        [ v.slots
+                            |> Array.toList
+                            |> catMaybes
+                            |> List.map .animation
+                        , [ v.hungerBarAnimation ]
+                        ]
             in
             Animation.subscription Animate animations
 
@@ -977,17 +1092,19 @@ hungerBarCornerRounding =
     hungerBarHeight / 2
 
 
-hungerBarInitAnimation : Plant -> Animation
-hungerBarInitAnimation plant =
-    Animation.style
-        [ Animation.width (Animation.px 0)
-        , Animation.fill (hungerBarColor minHunger)
-        ]
-        |> hungerBarUpdateAnimation plant
+hungerBarInitAnimation : Plant -> AnimationIdentifier -> Animation
+hungerBarInitAnimation plant animationIdentifier =
+    hungerBarUpdateAnimation_ plant
+        (Animation.style
+            [ Animation.width (Animation.px 0)
+            , Animation.fill (hungerBarColor minHunger)
+            ]
+        )
+        animationIdentifier
 
 
-hungerBarUpdateAnimation : Plant -> Animation -> Animation
-hungerBarUpdateAnimation plant =
+hungerBarUpdateAnimation_ : Plant -> Animation -> AnimationIdentifier -> Animation
+hungerBarUpdateAnimation_ plant animation animationIdentifier =
     let
         normalisedHunger =
             normalise minHunger maxHunger plant.hunger
@@ -1000,7 +1117,15 @@ hungerBarUpdateAnimation plant =
             [ Animation.width (Animation.px width)
             , Animation.fill (hungerBarColor plant.hunger)
             ]
+        , Animation.Messenger.send (AnimationDone animationIdentifier HungerBarUpdate)
         ]
+        animation
+
+
+hungerBarUpdateAnimation : Plant -> Animation -> CmdState Msg Model Animation
+hungerBarUpdateAnimation plant animation =
+    animationStart
+        |> CmdState.map (hungerBarUpdateAnimation_ plant animation)
 
 
 textLine : Int -> String -> Svg Msg
@@ -1087,17 +1212,30 @@ transparent =
     Animation.style [ Animation.opacity 0.0 ]
 
 
-targetEnter : Animation
-targetEnter =
-    Animation.interrupt [ Animation.to [ Animation.opacity 1.0 ] ] transparent
+targetEnter : Identified.Identifier -> CmdState Msg Model Animation
+targetEnter targetIdentifier =
+    animationStart
+        |> CmdState.map
+            (\animationIdentifier ->
+                Animation.interrupt
+                    [ Animation.to [ Animation.opacity 1.0 ]
+                    , Animation.Messenger.send (AnimationDone animationIdentifier (SlotEnter targetIdentifier))
+                    ]
+                    transparent
+            )
 
 
-targetExit : Identified.Identifier -> Animation -> Animation
-targetExit i =
-    Animation.interrupt
-        [ Animation.to [ Animation.opacity 0.0 ]
-        , Animation.Messenger.send (TargetExited i)
-        ]
+targetExit : Identified.Identifier -> Animation -> CmdState Msg Model Animation
+targetExit targetIdentifier animation =
+    animationStart
+        |> CmdState.map
+            (\animationIdentifier ->
+                Animation.interrupt
+                    [ Animation.to [ Animation.opacity 0.0 ]
+                    , Animation.Messenger.send (AnimationDone animationIdentifier (SlotExit targetIdentifier))
+                    ]
+                    animation
+            )
 
 
 viewSlot : Int -> Identified Person -> Slot -> Svg Msg
