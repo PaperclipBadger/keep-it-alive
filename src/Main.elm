@@ -135,7 +135,7 @@ applyColorMap { low, high, lowestTone, otherTones } x =
 
 numSlots : Int
 numSlots =
-    6
+    8
 
 
 startSlots : Int
@@ -233,12 +233,30 @@ maxAge =
 
 someFirstName : Name
 someFirstName =
-    "Greg"
+    "Postlethwait"
 
 
 otherFirstNames : List Name
 otherFirstNames =
-    [ "Steve", "Esther", "Blaine", "Yanni", "Jonathan", "Mickey", "Eve", "Remi", "Ribena", "Jamie", "James" ]
+    [ "Cucumber"
+    , "Esther"
+    , "Blaine"
+    , "Yanni"
+    , "Jonathan"
+    , "Mickey"
+    , "Eve"
+    , "Remi"
+    , "Ribena"
+    , "Jamie"
+    , "James"
+    , "Corn"
+    , "Ranjit"
+    , "Sarah"
+    , "Soren"
+    , "Castabridge"
+    , "Ornsworth"
+    , "Nickleback"
+    ]
 
 
 someMiddleName : Name
@@ -248,7 +266,18 @@ someMiddleName =
 
 otherMiddleNames : List Name
 otherMiddleNames =
-    [ "Godfrey", "\"Hopscotch\"", "William", "Horton" ]
+    [ "Godfrey"
+    , "\"Hopscotch\""
+    , "\"The Shoplifter\""
+    , "\"Fingers McGee\""
+    , "\"Ffotherington Ffortesque Fforbes FFarquar\""
+    , "\"Cat Puncher\""
+    , "\"Unmatched Quotes'"
+    , "Codswallop"
+    , "Hornbeam Moonbeam"
+    , "\"The Absolute Totalitarian\""
+    , "\"I Won't Fix It Until I'm Elected\""
+    ]
 
 
 someLastName : Name
@@ -258,7 +287,69 @@ someLastName =
 
 otherLastNames : List Name
 otherLastNames =
-    [ "Rogers", "Van Der Pant", "Carlsberg", "Sutton", "Li", "Wang", "Forger" ]
+    [ "Rogers"
+    , "Van Der Pant"
+    , "Carlsberg"
+    , "Sutton"
+    , "Li"
+    , "Wang"
+    , "Forger"
+    , "Jens"
+    , "Smithson"
+    , "Hanson"
+    , "Yudkowsky"
+    , "Humperdink"
+    , "Celeriac"
+    , "Kolashnikov"
+    , "McMorten"
+    , "MacIntyre"
+    , "Gettysburg"
+    , "Koch"
+    , "Rand"
+    , "Nietszsche"
+    , "Niemands"
+    , "Alles"
+    , "Tanaka"
+    , "Corvidlover"
+    , "Crow"
+    , "Crowley"
+    , "Pratchett"
+    ]
+
+
+someDescription : String
+someDescription =
+    "Breeds cats for a living, and doesn't have much to live on."
+
+
+otherDescriptions : List String
+otherDescriptions =
+    [ "Once killed a puppy. Claims it was an accident."
+    , "Successful heister of twelve and a half banks."
+    , "Their favourite board game is Monopoly. FEED THEM TO THE PLANT."
+    , "Continues developing their Ludum Dare games during the submission hour."
+    , "Accomplished writer, terrible baker."
+    , "Most often seen in your local Wetherspoons, playing the fruits."
+    , "Can't play the trumpet, but would like to be able to."
+    , "Not a big fan of horses."
+    , "Horse megafan. What noble creatures horses are."
+    , "Edits Wikipedia regularly."
+    , "Has won a large number of eating competitions, which may or may not be suprising depending on their weight."
+    , "Thinks they're really popular."
+    , "Confused by linear alegbra."
+    , "Can't read social cues."
+    , "Parties hard, all day every day."
+    , "Can't find their keys. Where are their keys? Those keys must be found"
+    , "Makes jam in their spare time."
+    , "Can't speak sign language, what a loser."
+    , "Likes to think they're a polyglot."
+    , "Knows seven (programming) languages."
+    , "Can't dance. At all. It's embarrassing."
+    , "Favourite karaoke song: Mr Bightside by The Killers"
+    , "Favourite karaoke song: All Star by Smash Mouth"
+    , "Favourite karaoke song: anything by Nickelback"
+    , "Favourite karaoke song: N/A (thinks karaoke is for children and pansies)"
+    ]
 
 
 somePerson : Person
@@ -266,6 +357,7 @@ somePerson =
     { firstName = "Defaulty"
     , middleName = Nothing
     , lastName = "McDefaultFace"
+    , description = "If you see this, a bug has happened. Please ignore the bug."
     , mass = 0
     , security = 0
     , popularity = 0
@@ -343,6 +435,7 @@ type alias Person =
     { firstName : Name
     , middleName : Maybe Name
     , lastName : Name
+    , description : String
     , mass : Mass
     , popularity : Popularity
     , security : Security
@@ -368,6 +461,7 @@ genPersonDetails =
     Random.map Person genFirstName
         |> Random.andThen (\f -> Random.map f genMiddleName)
         |> Random.andThen (\f -> Random.map f genLastName)
+        |> Random.andThen (\f -> Random.map f genDescription)
         |> Random.andThen
             (\f ->
                 Random.map (\seed -> ( seed, f )) genMassAndPopularitySeed
@@ -404,6 +498,11 @@ genMiddleName =
 genLastName : Random.Generator Name
 genLastName =
     Random.uniform someLastName otherLastNames
+
+
+genDescription : Random.Generator String
+genDescription =
+    Random.uniform someDescription otherDescriptions
 
 
 genMass : Float -> Random.Generator Mass
@@ -888,40 +987,73 @@ subscriptions model =
 -- VIEW
 
 
+textLineWhite : Int -> String -> Svg Msg
+textLineWhite i s =
+    Svg.text_
+        -- Text is anchored at the bottom, so we translate up to pad.
+        [ translate textPadding (toFloat (i + 1) * lineHeight - textPadding - textOffset)
+        , Svg.Attributes.fill "white"
+        , Svg.Attributes.fontSize (String.fromFloat fontSize)
+        ]
+        [ Svg.text s ]
+
+
+deathReason : PlantSize -> String
+deathReason size =
+    case size of
+        Small ->
+            "You didn't feed enough people to the plant, and it withered away and died."
+
+        Medium ->
+            "The plant is too hungry for your meager offerings. It finds someone else to take care of it."
+
+        Large ->
+            "The plant got hungry and ate you!"
+
+
 view : Model -> Browser.Document Msg
 view model =
-    case model.currentView of
-        TargetSelect v ->
-            { title = "The button, oooh"
-            , body =
-                [ Svg.svg
-                    [ Svg.Attributes.width (String.fromFloat pageWidth)
-                    , Svg.Attributes.height (String.fromFloat pageHeight)
-                    , Svg.Attributes.viewBox
-                        ([ 0, 0, pageWidth, pageHeight ] |> List.map String.fromFloat |> String.join " ")
-                    ]
-                    [ Svg.rect
+    { title = "Feed The Plant!"
+    , body =
+        [ Svg.svg
+            [ Svg.Attributes.width (String.fromFloat pageWidth)
+            , Svg.Attributes.height (String.fromFloat pageHeight)
+            , Svg.Attributes.viewBox
+                ([ 0, 0, pageWidth, pageHeight ] |> List.map String.fromFloat |> String.join " ")
+            ]
+            (List.concat
+                [ [ Svg.rect
                         [ Svg.Attributes.width (String.fromFloat pageWidth)
                         , Svg.Attributes.height (String.fromFloat pageHeight)
                         , Svg.Attributes.fill "black"
                         ]
                         []
-                    , viewPlant v model.plant
-                    , v.slots
-                        |> Array.toList
-                        |> indexedMap (\i -> Maybe.map (viewSlot i model.targets))
-                        |> catMaybes
-                        |> keyByIndex
-                        |> Svg.Keyed.node "g"
-                            [ translate optionsOriginX optionsOriginY ]
-                    ]
-                ]
-            }
+                  ]
+                , case model.currentView of
+                    TargetSelect v ->
+                        [ viewPlant v model.plant
+                        , v.slots
+                            |> Array.toList
+                            |> indexedMap (\i -> Maybe.map (viewSlot i model.targets))
+                            |> catMaybes
+                            |> keyByIndex
+                            |> Svg.Keyed.node "g"
+                                [ translate optionsOriginX optionsOriginY ]
+                        ]
 
-        GameOver ->
-            { title = "Game over!"
-            , body = [ Html.text "You died!" ]
-            }
+                    GameOver ->
+                        [ Svg.g
+                            [ translate textMargin textMargin
+                            ]
+                            [ textLineWhite 0 (deathReason (plantSize model.plant))
+                            , textLineWhite 2 ("Final plant mass: " ++ prettyFloat ((maxPersonMassKg - minPersonMassKg) * model.plant.mass) ++ "kg")
+                            , textLineWhite 4 "Take note of your score, then refresh and see if you can do better."
+                            ]
+                        ]
+                ]
+            )
+        ]
+    }
 
 
 indexedMap : (Int -> a -> b) -> List a -> List b
@@ -1032,7 +1164,7 @@ optionsOriginY =
 
 optionHeight : Float
 optionHeight =
-    6 * lineHeight + 2 * textMargin
+    4 * lineHeight + 2 * textMargin
 
 
 optionWidth : Float
@@ -1265,12 +1397,10 @@ viewSlot index people slot =
             []
         , Svg.g
             [ translate textMargin textMargin ]
-            [ textLine 0 ("Id: " ++ identifierToString slot.identifier)
-            , textLine 1 ("Name: " ++ viewFullName person)
-            , textLine 2 ("Mass: " ++ viewMass person)
-            , textLine 3 ("Security: " ++ viewSecurity person)
-            , textLine 4 ("Popularity: " ++ viewPopularity person)
-            , textLine 5 ("Goodness: " ++ viewGoodness person)
+            [ textLine 0 ("Name: " ++ viewFullName person)
+            , textLine 1 ("Mass: " ++ viewMass person)
+            , textLine 2 ("Popularity: " ++ viewPopularity person)
+            , textLine 3 (viewDescription person)
             ]
         ]
 
@@ -1278,6 +1408,11 @@ viewSlot index people slot =
 viewFullName : Person -> String
 viewFullName person =
     String.join " " [ person.firstName, Maybe.withDefault "" person.middleName, person.lastName ]
+
+
+viewDescription : Person -> String
+viewDescription =
+    .description
 
 
 roundTo : Int -> Float -> Float
@@ -1294,21 +1429,36 @@ prettyFloat f =
     String.fromFloat (roundTo 2 f)
 
 
+minPersonMassKg : Float
+minPersonMassKg =
+    40
+
+
+maxPersonMassKg : Float
+maxPersonMassKg =
+    100
+
+
+showMass : Mass -> String
+showMass mass =
+    prettyFloat (interpolateFloat minPersonMassKg maxPersonMassKg mass) ++ "kg"
+
+
 viewMass : Person -> String
-viewMass person =
-    prettyFloat (interpolateFloat 40 100 person.mass) ++ "kg" ++ " (" ++ String.fromFloat person.mass ++ ")"
+viewMass =
+    showMass << .mass
 
 
 viewSecurity : Person -> String
 viewSecurity person =
-    String.fromInt person.security
+    String.repeat person.goodness "★"
 
 
 viewPopularity : Person -> String
 viewPopularity person =
-    String.fromInt person.popularity
+    String.repeat person.popularity "★"
 
 
 viewGoodness : Person -> String
 viewGoodness person =
-    String.fromInt person.goodness
+    String.repeat person.goodness "★"
